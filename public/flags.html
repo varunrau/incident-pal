@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#feffff">
+  <title>Feature flags · Incident Pal</title>
+  <link rel="icon" href="/pal.svg" type="image/svg+xml">
+  <meta name="description" content="Watch the errors spike, find the flag, and let your agent roll it back.">
+  <meta property="og:title" content="Incident Pal">
+  <meta property="og:description" content="Watch the errors spike, find the flag, and let your agent roll it back.">
+  <meta property="og:image" content="/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/flags.js"></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="brand">
+        <img src="/pal.svg" width="26" height="26" alt="">
+        <strong>Incident Pal</strong>
+      </div>
+      <nav class="app-nav" aria-label="Main">
+        <a href="/">Dashboard</a>
+        <a href="/flags" aria-current="page">Feature flags</a>
+        <a href="/chat">Chat</a>
+        <a href="/ampersand">Ampersand</a>
+      </nav>
+    </div>
+  </header>
+  <main class="flags-page" aria-labelledby="flags-heading">
+    <h1 id="flags-heading">Feature flags</h1>
+    <p id="connection-label" class="connection" role="status" hidden></p>
+    <div class="flags-layout">
+      <section class="flag-controls" aria-labelledby="flag-controls-heading">
+        <h2 id="flag-controls-heading">Controls</h2>
+        <div id="flag-list"><p>Connecting…</p></div>
+        <p id="flag-feedback" class="flag-feedback error-text" role="status" hidden></p>
+      </section>
+      <section class="flag-history" aria-labelledby="flag-history-heading">
+        <h2 id="flag-history-heading">Flag history</h2>
+        <ol id="flag-history"><li>Loading history…</li></ol>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
