@@ -33,10 +33,6 @@ export function buildApp({
     },
   }, async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.ip) ||
-        !['localhost', '127.0.0.1', '[::1]', '::1'].includes(request.hostname)) {
-      return reply.code(403).send({ message: 'The transcript is available from localhost.' });
-    }
     return agent.transcript(request.query.after, request.query.sessionId);
   });
 

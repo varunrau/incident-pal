@@ -183,8 +183,6 @@ for (const mode of ['single', 'multi'] as const) {
     assert.equal(empty.sessionId, null);
     assert.equal(empty.usage, null);
     assert.deepEqual(empty.items, []);
-    assert.equal((await app.inject({ url: transcriptUrl, remoteAddress: '192.0.2.1' })).statusCode, 403);
-    assert.equal((await app.inject({ url: transcriptUrl, headers: { host: 'outside.example' } })).statusCode, 403);
     assert.match((await app.inject('/ampersand')).body, /System instructions/);
 
     await setStrict(true);
