@@ -104,13 +104,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  const { AMPERSAND_API_KEY, AMPERSAND_BASE_URL, AMPERSAND_MODEL, AMPERSAND_MODE } = process.env;
+  const { AMPERSAND_API_KEY, AMPERSAND_BASE_URL, AMPERSAND_MODEL } = process.env;
   try {
     const app = buildApp({
       logger: true,
       ampersand: {
         apiKey: AMPERSAND_API_KEY ?? '', baseUrl: AMPERSAND_BASE_URL, model: AMPERSAND_MODEL,
-        mode: AMPERSAND_MODE === 'multi' ? 'multi' : 'single',
       },
     });
     for (const signal of ['SIGINT', 'SIGTERM']) {

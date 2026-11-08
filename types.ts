@@ -110,7 +110,6 @@ export interface AmpersandTranscript {
   sessionId: string | null;
   instructions: string;
   model: string;
-  multiAgent: boolean;
   usage: { inputTokens: number; outputTokens: number; estimatedCostUsd: number | null } | null;
   items: AmpersandTranscriptItem[];
   nextCursor: string | null;

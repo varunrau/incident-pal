@@ -38,7 +38,7 @@ For a demo with people on the same trusted network, run `HOST=0.0.0.0 npm start`
 
 ## Ampersand incident agent
 
-The app uses one [Ampersand](https://ampersand.humansand.ai/docs/GUIDES.html) agent by default. Set `AMPERSAND_MODE=multi` to enable delegation in the same session. Hosted multi-agent runs can stall on a provider-owned group action. `AMPERSAND_BASE_URL` and `AMPERSAND_MODEL` default to the hosted API and `ampersand-v0.1`.
+The app uses one [Ampersand](https://ampersand.humansand.ai/docs/GUIDES.html) agent. `AMPERSAND_BASE_URL` and `AMPERSAND_MODEL` default to the hosted API and `ampersand-v0.1`.
 
 1. Open **Chat** and join with a display name. Turn on **Strict payment validation** in **Feature flags**.
 2. Ask Ampersand to investigate in **#incident-response** once failures appear in **Request logs**.
@@ -65,4 +65,4 @@ One Ampersand session receives new human messages across all channels. The agent
 
 `read_channel` and `query_logs` return newest first. Pass `nextBefore` as `before` for older results. `tail_logs` returns oldest first within a batch. Poll with the returned cursor and the same filters. `missed` indicates that some entries aged out. Use `snapshotId` from `get_flags` as `expectedSnapshotId` for `update_flag`.
 
-`update_flag`, `send_message`, and `pass` run inside the authenticated Ampersand session bridge.
+`update_flag`, `post_message`, and `pass` run inside the authenticated Ampersand session bridge.

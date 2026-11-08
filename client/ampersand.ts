@@ -53,7 +53,7 @@ async function load(append = false) {
     sessionId = data.sessionId;
     nextCursor = data.nextCursor;
     setText('transcript-session', [
-      data.model, sessionId && `Session ${sessionId}`, data.multiAgent && 'Lead agent transcript · Usage across all agents',
+      data.model, sessionId && `Session ${sessionId}`,
     ].filter(Boolean).join(' · '));
     setText('transcript-input', data.usage ? integer.format(data.usage.inputTokens) : '—');
     setText('transcript-output', data.usage ? integer.format(data.usage.outputTokens) : '—');

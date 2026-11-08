@@ -4,9 +4,9 @@ import { channelField, object } from './schemas.js';
 
 const ampersandAuthor = { id: 'agent:ampersand', name: 'Ampersand' };
 
-export function sendMessage(chat: ReturnType<typeof createChat>): Tool<{ channel: string; text: string }> {
+export function postMessage(chat: ReturnType<typeof createChat>): Tool<{ channel: string; text: string }> {
   return {
-    name: 'send_message',
+    name: 'post_message',
     description: 'Post as Ampersand in a chat channel.',
     parameters: object({
       channel: channelField,

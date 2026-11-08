@@ -9,7 +9,6 @@ export interface AmpersandConfig {
   apiKey: string;
   baseUrl?: string;
   model?: string;
-  mode?: 'single' | 'multi';
 }
 
 export interface AgentInput {
@@ -111,16 +110,9 @@ async function* readEvents(response: Response) {
 export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log: FastifyBaseLogger) {
   const base = (config.baseUrl ?? 'https://ampersand.humansand.ai/v1').replace(/\/+$/, '');
   const model = config.model ?? 'ampersand-v0.1';
-  const multiAgent = config.mode === 'multi';
-  // The hosted multi-agent harness uses send_message for its own coordination.
-  const postTool = multiAgent ? 'post_chat_message' : 'send_message';
-  const definitions = tools.definitions.map(tool => tool.name === 'send_message' ? { ...tool, name: postTool } : tool);
+  const { definitions } = tools;
   const toolNames = new Set(definitions.map(tool => tool.name));
-  const instructions = readFileSync(new URL('../prompts/ampersand.md', import.meta.url), 'utf8')
-    .trimEnd().replaceAll('{{post_tool}}', postTool);
-  const agentInstructions = multiAgent
-    ? `${instructions}\n${readFileSync(new URL('../prompts/ampersand-multi.md', import.meta.url), 'utf8').trimEnd()}`
-    : instructions;
+  const instructions = readFileSync(new URL('../prompts/ampersand.md', import.meta.url), 'utf8').trimEnd();
   const lifetime = new AbortController();
   const queue: AgentInput[] = [];
   let state: Lifecycle = { kind: 'idle' };
@@ -185,7 +177,7 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     const changed = () => Object.assign(new Error('The session changed. Refresh the transcript.'), { statusCode: 409 });
     if (after && (!active || active.id !== sessionId)) throw changed();
     const result: AmpersandTranscript = {
-      sessionId: active?.id ?? null, instructions: agentInstructions, model, multiAgent, usage: null, items: [], nextCursor: null,
+      sessionId: active?.id ?? null, instructions, model, usage: null, items: [], nextCursor: null,
     };
     if (!active) return result;
 
@@ -266,8 +258,7 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
       let receipt: Receipt;
       try {
         if (action.type !== 'function_call') throw new Error('Only function tools are supported.');
-        const name = action.name === postTool ? 'send_message' : action.name;
-        receipt = { ...target, success: true, output: JSON.stringify(tools.execute(name, action.arguments)) };
+        receipt = { ...target, success: true, output: JSON.stringify(tools.execute(action.name, action.arguments)) };
       } catch (error) {
         receipt = { ...target, success: false, error: error instanceof Error ? error.message : 'Tool failed.' };
       }
@@ -325,8 +316,7 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     try {
       return await (await api('', { body: {
         agent: {
-          model, instructions: agentInstructions, tools: definitions,
-          multi_agent: { enabled: multiAgent },
+          model, instructions, tools: definitions,
           ampersand: { compaction: 'auto' },
         },
         environment: { type: 'none' },

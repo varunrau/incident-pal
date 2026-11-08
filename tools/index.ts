@@ -9,7 +9,7 @@ import { pass } from './pass.js';
 import { queryLogs } from './query_logs.js';
 import { readChannel } from './read_channel.js';
 import type { object } from './schemas.js';
-import { sendMessage } from './send_message.js';
+import { postMessage } from './post_message.js';
 import { tailLogs } from './tail_logs.js';
 import { updateFlag } from './update_flag.js';
 
@@ -49,7 +49,7 @@ export function createAgentTools(
   register(getFlags(telemetry));
   register(getFlagHistory(telemetry));
   register(updateFlag(telemetry));
-  register(sendMessage(chat));
+  register(postMessage(chat));
   register(pass);
 
   const definitions = [...tools.values()].map(tool => tool.schema);
