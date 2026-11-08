@@ -31,7 +31,7 @@ interface Action {
 
 interface SessionState {
   id: string;
-  status: string;
+  status: 'idle' | 'in_progress' | 'requires_action' | 'failed';
   error?: string | null;
   metadata?: Record<string, string>;
   required_actions?: Action[];
@@ -47,10 +47,25 @@ type Receipt = { type: 'agent.session.input.tool_result'; turn_id: string; call_
 interface Session {
   id: string;
   controller: AbortController;
-  receipts: Map<string, Receipt>;
-  pending: Set<string>;
-  accepted: Set<string>;
+  // Tool calls (`turn_id:call_id`) already executed in this session. A call runs at most once,
+  // however often it reappears in required_actions; its receipt is retried until Ampersand
+  // accepts it or the session ends.
+  handled: Set<string>;
 }
+
+// The one Ampersand session this server drives.
+//   idle     → no session; the next queued input creates one.
+//   creating → a create request is in flight or being retried. `attempt` is stored in the
+//              session metadata. Once a create fails in a way that may have succeeded
+//              (`ambiguous`), the next try looks for that session before creating another.
+//   active   → a live session that receives chat input and tool results. A failed or missing
+//              session returns to idle.
+//   closed   → shutdown; nothing new starts.
+type Lifecycle =
+  | { kind: 'idle' }
+  | { kind: 'creating'; attempt: string; ambiguous: boolean }
+  | { kind: 'active'; session: Session }
+  | { kind: 'closed' };
 
 class ApiError extends Error {
   constructor(readonly status: number, readonly retryMs: number, operation: string) {
@@ -108,9 +123,13 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     : instructions;
   const lifetime = new AbortController();
   const queue: AgentInput[] = [];
-  let session: Session | undefined;
+  let state: Lifecycle = { kind: 'idle' };
   let delivering = false;
-  let creationAttempt: string | undefined;
+  // Functions rather than inline checks: `state` changes across awaits, which control-flow
+  // narrowing does not see.
+  const activeSession = () => state.kind === 'active' ? state.session : undefined;
+  const current = (active: Session) => state.kind === 'active' && state.session === active;
+  const closed = () => state.kind === 'closed';
 
   async function api(path: string, options: {
     body?: object;
@@ -152,8 +171,17 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     return await (await api(path(active.id), { signal: active.controller.signal })).json() as SessionState;
   }
 
+  async function find(attempt: string, signal?: AbortSignal) {
+    const page = await (await api('?limit=100&order=desc', { signal })).json() as { data: SessionState[] };
+    return page.data.find(item => item.metadata?.incident_pal_creation === attempt);
+  }
+
+  async function remove(id: string, signal?: AbortSignal) {
+    await api(path(id), { method: 'DELETE', signal }).catch(() => {});
+  }
+
   async function transcript(after?: string, sessionId?: string): Promise<AmpersandTranscript> {
-    const active = session;
+    const active = activeSession();
     const changed = () => Object.assign(new Error('The session changed. Refresh the transcript.'), { statusCode: 409 });
     if (after && (!active || active.id !== sessionId)) throw changed();
     const result: AmpersandTranscript = {
@@ -164,15 +192,15 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     const params = new URLSearchParams({ limit: '25', order: 'desc' });
     if (after) params.set('after', after);
     try {
-      const [state, page] = await Promise.all([
+      const [snapshot, page] = await Promise.all([
         saved(active),
         api(`${path(active.id)}/items?${params}`, { signal: active.controller.signal }).then(async response =>
           await response.json() as { data: AmpersandTranscript['items']; has_more: boolean; last_id: string | null }),
       ]);
       result.items = page.data;
       result.nextCursor = page.has_more ? page.last_id : null;
-      if (state.usage) {
-        const { input_tokens: inputTokens, output_tokens: outputTokens, input_tokens_details } = state.usage;
+      if (snapshot.usage) {
+        const { input_tokens: inputTokens, output_tokens: outputTokens, input_tokens_details } = snapshot.usage;
         const cached = input_tokens_details?.cached_tokens;
         // https://ampersand.humansand.ai/docs/PRICING.html
         const estimatedCostUsd = cached !== undefined && ['ampersand-v0.1', 'ampersand-tutor-v0.1'].includes(model)
@@ -181,13 +209,13 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
         result.usage = { inputTokens, outputTokens, estimatedCostUsd };
       }
     } catch (error) {
-      if (session !== active) throw changed();
+      if (!current(active)) throw changed();
       if (error instanceof ApiError && error.status === 404) {
         throw Object.assign(new Error('Ampersand could not find the active session.'), { statusCode: 502 });
       }
       throw Object.assign(new Error('Could not load the transcript from Ampersand.'), { statusCode: 502 });
     }
-    if (session !== active) throw changed();
+    if (!current(active)) throw changed();
     return result;
   }
 
@@ -197,70 +225,62 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     });
   }
 
-  function replace(active: Session) {
-    if (session !== active) return;
+  // active → idle. The next queued input creates a fresh session.
+  function end(active: Session) {
+    if (!current(active)) return;
     active.controller.abort();
-    session = undefined;
+    state = { kind: 'idle' };
     void deliver();
-    void api(path(active.id), { method: 'DELETE' }).catch(() => {});
+    void remove(active.id);
   }
 
   async function sendReceipt(active: Session, action: Action, key: string, receipt: Receipt) {
     const { signal } = active.controller;
-    try {
-      for (let attempt = 0; !signal.aborted; attempt++) {
-        try {
-          await submit(active, receipt, `tool:${key}`);
-          active.accepted.add(key);
-          return;
-        } catch (error) {
-          if (signal.aborted) return;
-          if (error instanceof ApiError && error.status === 404) return replace(active);
-          if (error instanceof ApiError && [400, 409].includes(error.status)) {
-            const state = await saved(active).catch(() => undefined);
-            if (state && !state.required_actions?.some(item => item.turn_id === action.turn_id && item.call_id === action.call_id)) {
-              active.accepted.add(key);
-              return;
-            }
+    for (let attempt = 0; !signal.aborted; attempt++) {
+      try {
+        await submit(active, receipt, `tool:${key}`);
+        return;
+      } catch (error) {
+        if (signal.aborted) return;
+        if (error instanceof ApiError && error.status === 404) return end(active);
+        if (error instanceof ApiError && [400, 409].includes(error.status)) {
+          const latest = await saved(active).catch(() => undefined);
+          if (latest && !latest.required_actions?.some(item => item.turn_id === action.turn_id && item.call_id === action.call_id)) {
+            return;
           }
-          log.warn({ err: error, tool: action.name }, 'Retrying Ampersand tool receipt');
-          await wait(error, attempt, signal);
         }
+        log.warn({ err: error, tool: action.name }, 'Retrying Ampersand tool receipt');
+        await wait(error, attempt, signal);
       }
-    } finally {
-      active.pending.delete(key);
     }
   }
 
   function handleActions(active: Session, actions: Action[] = []) {
-    if (session !== active) return;
+    if (!current(active)) return;
     for (const action of actions) {
       if (!toolNames.has(action.name)) continue;
       const key = `${action.turn_id}:${action.call_id}`;
-      if (active.pending.has(key) || active.accepted.has(key)) continue;
-      let receipt = active.receipts.get(key);
-      if (!receipt) {
-        const target = { type: 'agent.session.input.tool_result' as const, turn_id: action.turn_id, call_id: action.call_id };
-        try {
-          if (action.type !== 'function_call') throw new Error('Only function tools are supported.');
-          const name = action.name === postTool ? 'send_message' : action.name;
-          receipt = { ...target, success: true, output: JSON.stringify(tools.execute(name, action.arguments)) };
-        } catch (error) {
-          receipt = { ...target, success: false, error: error instanceof Error ? error.message : 'Tool failed.' };
-        }
-        active.receipts.set(key, receipt);
+      if (active.handled.has(key)) continue;
+      active.handled.add(key);
+      const target = { type: 'agent.session.input.tool_result' as const, turn_id: action.turn_id, call_id: action.call_id };
+      let receipt: Receipt;
+      try {
+        if (action.type !== 'function_call') throw new Error('Only function tools are supported.');
+        const name = action.name === postTool ? 'send_message' : action.name;
+        receipt = { ...target, success: true, output: JSON.stringify(tools.execute(name, action.arguments)) };
+      } catch (error) {
+        receipt = { ...target, success: false, error: error instanceof Error ? error.message : 'Tool failed.' };
       }
-      active.pending.add(key);
       void sendReceipt(active, action, key, receipt);
     }
   }
 
-  function handleState(active: Session, state: SessionState) {
-    if (session !== active) return;
-    if (state.status === 'failed') {
-      log.warn({ reason: state.error }, 'Ampersand session failed');
-      replace(active);
-    } else handleActions(active, state.required_actions);
+  function handleState(active: Session, snapshot: SessionState) {
+    if (!current(active)) return;
+    if (snapshot.status === 'failed') {
+      log.warn({ reason: snapshot.error }, 'Ampersand session failed');
+      end(active);
+    } else handleActions(active, snapshot.required_actions);
   }
 
   async function watch(active: Session) {
@@ -270,8 +290,8 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
         const response = await api(`${path(active.id)}/events`, { stream: true, signal });
         // The stream has no replay cursor. Reconcile after opening it so calls
         // issued before or during reconnection are still handled.
-        void saved(active).then(state => handleState(active, state)).catch(error => {
-          if (error instanceof ApiError && error.status === 404) replace(active);
+        void saved(active).then(snapshot => handleState(active, snapshot)).catch(error => {
+          if (error instanceof ApiError && error.status === 404) end(active);
           else if (!signal.aborted) log.warn({ err: error }, 'Could not reconcile Ampersand session');
         });
         for await (const event of readEvents(response)) {
@@ -283,7 +303,7 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
         }
       } catch (error) {
         if (signal.aborted) return;
-        if (error instanceof ApiError && error.status === 404) return replace(active);
+        if (error instanceof ApiError && error.status === 404) return end(active);
         log.warn({ err: error }, 'Reconnecting Ampersand event stream');
         await wait(error, attempt, signal);
         continue;
@@ -292,15 +312,16 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     }
   }
 
+  // idle | creating → creating. Session creation has no idempotency key, so a create whose
+  // response was lost is found by its attempt ID before being retried.
   async function create(input: AgentInput) {
-    if (creationAttempt) {
-      // Session creation has no idempotency key. Check for a saved session
-      // before retrying a create whose response may have been lost.
-      const page = await (await api('?limit=100&order=desc')).json() as { data: SessionState[] };
-      const existing = page.data.find(state => state.metadata?.incident_pal_creation === creationAttempt);
+    const previous = state.kind === 'creating' ? state : undefined;
+    if (previous?.ambiguous) {
+      const existing = await find(previous.attempt);
       if (existing) return existing;
     }
-    creationAttempt ??= randomUUID();
+    const attempt = previous?.attempt ?? randomUUID();
+    state = { kind: 'creating', attempt, ambiguous: previous?.ambiguous ?? false };
     try {
       return await (await api('', { body: {
         agent: {
@@ -309,11 +330,14 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
           ampersand: { compaction: 'auto' },
         },
         environment: { type: 'none' },
-        metadata: { incident_pal_creation: creationAttempt },
+        metadata: { incident_pal_creation: attempt },
         input: [inputMessage(input)],
       } })).json() as SessionState;
     } catch (error) {
-      if (error instanceof ApiError && error.status < 500 && error.status !== 408) creationAttempt = undefined;
+      if (state.kind === 'creating' && state.attempt === attempt) {
+        const rejected = error instanceof ApiError && error.status < 500 && error.status !== 408;
+        state = rejected ? { kind: 'idle' } : { kind: 'creating', attempt, ambiguous: true };
+      }
       throw error;
     }
   }
@@ -322,31 +346,32 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
     if (delivering) return;
     delivering = true;
     try {
-      for (let attempt = 0; queue.length && !lifetime.signal.aborted;) {
+      for (let attempt = 0; queue.length && !closed();) {
         const input = queue[0];
-        const active = session;
+        const active = activeSession();
         try {
           if (!active) {
-            const state = await create(input);
-            creationAttempt = undefined;
-            if (lifetime.signal.aborted) return;
-            session = {
-              id: state.id, controller: new AbortController(), receipts: new Map(), pending: new Set(), accepted: new Set(),
-            };
+            const created = await create(input);
+            if (closed()) {
+              void remove(created.id, AbortSignal.timeout(2_000));
+              return;
+            }
+            const session: Session = { id: created.id, controller: new AbortController(), handled: new Set() };
+            state = { kind: 'active', session };
             queue.shift();
-            handleState(session, state);
-            if (session) void watch(session);
+            handleState(session, created);
+            if (current(session)) void watch(session);
           } else {
             await submit(active, { type: 'agent.session.input.message', input: [inputMessage(input)] }, `input:${input.id}`);
-            if (session !== active) continue;
+            if (!current(active)) continue;
             queue.shift();
           }
           attempt = 0;
         } catch (error) {
-          if (lifetime.signal.aborted) return;
-          if (active && session !== active) continue;
+          if (closed()) return;
+          if (active && !current(active)) continue;
           if (active && error instanceof ApiError && error.status === 404) {
-            replace(active);
+            end(active);
             continue;
           }
           log.warn({ err: error, inputId: input.id }, 'Could not deliver Ampersand input');
@@ -368,12 +393,19 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
       queue.push(input);
       void deliver();
     },
+    // any → closed. Deletes the live session, or one an interrupted create may have made.
     async close() {
-      const active = session;
-      session = undefined;
-      active?.controller.abort();
+      const previous = state;
+      state = { kind: 'closed' };
       lifetime.abort();
-      if (active) await api(path(active.id), { method: 'DELETE', signal: AbortSignal.timeout(2_000) }).catch(() => {});
+      const signal = AbortSignal.timeout(2_000);
+      if (previous.kind === 'active') {
+        previous.session.controller.abort();
+        await remove(previous.session.id, signal);
+      } else if (previous.kind === 'creating') {
+        const existing = await find(previous.attempt, signal).catch(() => undefined);
+        if (existing) await remove(existing.id, signal);
+      }
     },
   };
 }
