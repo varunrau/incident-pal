@@ -9,6 +9,5 @@ export function updateFlag(telemetry: ReturnType<typeof createTelemetry>): Tool<
     description: 'Turn any feature flag on or off.',
     parameters: setFlagBody,
     execute: ({ flag, enabled }) => telemetry.setFlag(flag, enabled, 'agent'),
-    agentOnly: true,
-  };
+    };
 }

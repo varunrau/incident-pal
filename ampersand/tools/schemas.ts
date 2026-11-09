@@ -17,7 +17,6 @@ export const logFilters = {
   level,
   userId: { type: 'string', maxLength: 64 },
   requestId: { type: 'string', maxLength: 64 },
-  flowId: { type: 'string', maxLength: 64 },
   route: { type: 'string', enum: routes },
   limit: { type: 'integer', minimum: 1, maximum: 200 },
 };

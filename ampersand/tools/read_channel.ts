@@ -1,8 +1,8 @@
-import type { createChat } from '../../messenger/chat.js';
+import type { Chat } from '../../messenger/chat.js';
 import type { Tool } from './index.js';
 import { channelField, object } from './schemas.js';
 
-export function readChannel(chat: ReturnType<typeof createChat>): Tool<{ channel: string; before?: number; limit?: number }> {
+export function readChannel(chat: Chat): Tool<{ channel: string; before?: number; limit?: number }> {
   return {
     name: 'read_channel',
     description: 'Read messages in one channel, newest first. Pass nextBefore as before for older messages.',

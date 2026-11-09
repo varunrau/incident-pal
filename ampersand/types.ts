@@ -8,11 +8,12 @@ export interface AmpersandTranscript {
 }
 
 export interface AmpersandTranscriptItem {
+  id?: string | null;
   type?: string;
   role?: 'user' | 'assistant';
   content?: { text?: string; type?: string }[];
   metadata?: { channel?: string; sender_name?: string } | null;
   name?: string;
   call_id?: string;
-  status?: string;
+  status?: string | null;
 }

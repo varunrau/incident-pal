@@ -3,8 +3,7 @@ import { object } from './schemas.js';
 
 export const pass: Tool = {
   name: 'pass',
-  description: 'Finish quietly when you have nothing useful to add.',
+  description: 'Yield without a visible message when no useful action is available now. Call pass on its own.',
   parameters: object(),
   execute: () => ({ passed: true }),
-  agentOnly: true,
 };

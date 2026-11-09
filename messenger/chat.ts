@@ -1,9 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import type { ServerResponse } from 'node:http';
-import type { FastifyPluginAsync } from 'fastify';
 import { shoppers } from '../shared/demo-shoppers.js';
-import { responseChannel, statusChannel, type ChatAuthor, type ChatChannel, type ChatMessage, type ChatSession, type ChatSnapshot } from './types.js';
+import type { ChatAuthor, ChatChannel, ChatMessage, ChatSession, ChatSnapshot } from './types.js';
 
 type SeedMessage = [supportAuthor: string | null, text: string];
 
@@ -43,8 +41,8 @@ const customerChannels = shoppers.map(({ id, name }) => {
 });
 
 const defaultChannels: ChatChannel[] = [
-  { id: responseChannel, topic: 'Technical discussion for responders' },
-  { id: statusChannel, topic: 'Updates on impact and recovery for stakeholders' },
+  { id: 'incident-response', topic: 'Technical discussion for responders' },
+  { id: 'global-incident-status', topic: 'Updates on impact and recovery for stakeholders' },
   { id: 'all-water-cooler', topic: 'General workspace conversation' },
   { id: 'eng-core-payments', topic: 'Checkout and payment engineering' },
   { id: 'eng-growth', topic: 'Growth experiments and onboarding' },
@@ -74,170 +72,135 @@ const rosterAvatars = new Map([
 const joinAvatars = ['pebble-turtle', 'sun-puff', 'moss-hare', 'reef-axolotl'];
 
 const historyLimit = 100;
-const messageLimit = 2_000;
+const seedMessageSpacingMs = 60_000;
 
-interface MessageInput {
-  text: string;
-  nonce: string;
+export const messageLimit = 2_000;
+export const avatarNames = [...rosterAvatars.values(), ...joinAvatars];
+
+interface HistoryEntry {
+  message: ChatMessage;
+  nonce?: string;
+}
+
+class ChannelNotFoundError extends Error {
+  readonly statusCode = 404;
+
+  constructor() {
+    super('Channel not found.');
+  }
+}
+
+export class ChannelExistsError extends Error {
+  readonly statusCode = 409;
+
+  constructor(id: string) {
+    super(`#${id} already exists.`);
+  }
 }
 
 function event(name: 'snapshot' | 'channel' | 'message', data: ChatSnapshot | ChatChannel | ChatMessage) {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-export function createChat() {
-  const channels = [...defaultChannels];
-  const participants = new Map<string, ChatAuthor>();
-  const availableAvatars = [...joinAvatars];
-  const clients = new Set<ServerResponse>();
-  const histories = new Map(channels.map(channel => [
-    channel.id, [] as Array<{ message: ChatMessage; nonce?: string }>,
-  ]));
-  let sequence = 0;
-  const now = Date.now();
-  for (const [index, [channel, name, text]] of projectHistory.entries()) {
-    histories.get(channel)?.push({
-      message: { id: ++sequence, channel, author: { id: `seed:${name}`, name, avatar: rosterAvatars.get(name) }, text, at: now - (projectHistory.length - index) * 60_000 },
-    });
-  }
+export class Chat {
+  private readonly channels = [...defaultChannels];
+  private readonly participants = new Map<string, ChatAuthor>();
+  private readonly availableAvatars = [...joinAvatars];
+  private readonly clients = new Set<ServerResponse>();
+  private readonly histories = new Map<string, HistoryEntry[]>(this.channels.map(channel => [channel.id, []]));
+  private sequence = 0;
 
-  function pickAvatar() {
-    if (!availableAvatars.length) availableAvatars.push(...joinAvatars);
-    const [avatar] = availableAvatars.splice(randomInt(availableAvatars.length), 1);
-    return avatar;
-  }
-
-  function broadcast(payload: string) {
-    for (const stream of clients) {
-      if (stream.writableNeedDrain) stream.destroy();
-      else if (!stream.destroyed && !stream.writableEnded) stream.write(payload);
+  constructor() {
+    const now = Date.now();
+    for (const [index, [channel, name, text]] of projectHistory.entries()) {
+      this.histories.get(channel)?.push({
+        message: {
+          id: ++this.sequence, channel, author: { id: `seed:${name}`, name, avatar: rosterAvatars.get(name) }, text,
+          at: now - (projectHistory.length - index) * seedMessageSpacingMs,
+        },
+      });
     }
   }
 
-  function participant(authorization?: string) {
-    if (authorization?.startsWith('Bearer ')) return participants.get(authorization.slice(7));
+  participant(authorization?: string) {
+    if (authorization?.startsWith('Bearer ')) return this.participants.get(authorization.slice(7));
   }
 
-  function postMessage(channel: string, author: ChatAuthor, text: string, nonce?: string) {
-    const history = histories.get(channel);
-    if (!history) throw Object.assign(new Error('Channel not found.'), { statusCode: 404 });
-    const message = { id: ++sequence, channel, author, text, at: Date.now() };
+  // A returning participant keeps their avatar when they change their name.
+  join(name: string, authorization?: string): ChatSession {
+    const avatar = this.participant(authorization)?.avatar ?? this.pickAvatar();
+    const author = { id: randomUUID(), name, avatar };
+    const token = randomUUID();
+    this.participants.set(token, author);
+    return { author, token };
+  }
+
+  listChannels() {
+    return this.channels.slice();
+  }
+
+  createChannel(id: string) {
+    if (this.histories.has(id)) throw new ChannelExistsError(id);
+    const channel = { id, topic: '' };
+    this.histories.set(id, []);
+    this.channels.push(channel);
+    this.broadcast(event('channel', channel));
+    return channel;
+  }
+
+  postMessage(channel: string, author: ChatAuthor, text: string, nonce?: string) {
+    const history = this.history(channel);
+    const message = { id: ++this.sequence, channel, author, text, at: Date.now() };
     history.push({ message, nonce });
     if (history.length > historyLimit) history.shift();
-    broadcast(event('message', message));
+    this.broadcast(event('message', message));
     return message;
   }
 
-  function readChannel(channel: string, before?: number, limit = 25) {
-    const history = histories.get(channel);
-    if (!history) throw Object.assign(new Error('Channel not found.'), { statusCode: 404 });
-    const matches = history.filter(item => before === undefined || item.message.id < before);
+  findByNonce(channel: string, authorId: string, nonce: string) {
+    return this.history(channel).find(item => item.nonce === nonce && item.message.author.id === authorId)?.message;
+  }
+
+  readChannel(channel: string, before?: number, limit = 25) {
+    const matches = this.history(channel).filter(item => before === undefined || item.message.id < before);
     const messages = matches.slice(-limit).reverse().map(item => item.message);
     return { messages, nextBefore: matches.length > limit ? messages.at(-1)!.id : null };
   }
 
-  const routes: FastifyPluginAsync<{
-    onMessage: (message: ChatMessage) => void;
-  }> = async (app, { onMessage }) => {
-    await Promise.all([...rosterAvatars.values(), ...joinAvatars].map(async avatar => {
-      const image = await readFile(new URL(`../../messenger/public/avatars/${avatar}.webp`, import.meta.url));
-      app.get(`/avatars/${avatar}.webp`, async (request, reply) =>
-        reply.type('image/webp').header('Cache-Control', 'public, max-age=3600').send(image));
+  subscribe(stream: ServerResponse) {
+    this.clients.add(stream);
+    stream.once('close', () => this.clients.delete(stream));
+    stream.write(event('snapshot', {
+      channels: this.channels,
+      messages: [...this.histories.values()].flatMap(history => history.map(item => item.message)),
     }));
+  }
 
-    app.post<{ Body: { name: string }; Reply: ChatSession }>('/participants', {
-      schema: {
-        body: {
-          type: 'object', required: ['name'], additionalProperties: false,
-          properties: { name: { type: 'string', minLength: 1, maxLength: 40, pattern: '\\S' } },
-        },
-      },
-    }, async ({ body, headers }, reply) => {
-      const avatar = participant(headers.authorization)?.avatar ?? pickAvatar();
-      const author = { id: randomUUID(), name: body.name.trim(), avatar };
-      const token = randomUUID();
-      participants.set(token, author);
-      return reply.code(201).send({ author, token });
-    });
+  heartbeat() {
+    this.broadcast(': heartbeat\n\n');
+  }
 
-    app.post<{ Body: { name: string } }>('/channels', {
-      schema: {
-        body: {
-          type: 'object', required: ['name'], additionalProperties: false,
-          properties: { name: { type: 'string', minLength: 1, maxLength: 60 } },
-        },
-      },
-    }, async ({ body, headers }, reply) => {
-      if (!participant(headers.authorization)) {
-        return reply.code(401).send({ message: 'Choose a display name to create a channel.' });
-      }
-      const id = body.name.trim().toLowerCase().replace(/\s+/g, '-');
-      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
-        return reply.code(400).send({ message: 'Use letters and numbers separated by spaces or hyphens.' });
-      }
-      if (histories.has(id)) {
-        return reply.code(409).send({ message: `#${id} already exists.` });
-      }
+  disconnectAll() {
+    for (const stream of this.clients) stream.end();
+    this.clients.clear();
+  }
 
-      const channel = { id, topic: '' };
-      histories.set(id, []);
-      channels.push(channel);
-      broadcast(event('channel', channel));
-      return reply.code(201).send(channel);
-    });
+  private history(channel: string) {
+    const history = this.histories.get(channel);
+    if (!history) throw new ChannelNotFoundError();
+    return history;
+  }
 
-    app.post<{ Params: { channel: string }; Body: MessageInput }>('/channels/:channel/messages', {
-      bodyLimit: 32_768,
-      schema: {
-        body: {
-          type: 'object', required: ['text', 'nonce'], additionalProperties: false,
-          properties: {
-            text: { type: 'string', minLength: 1, maxLength: messageLimit, pattern: '\\S' },
-            nonce: { type: 'string', pattern: '^[0-9a-f]{32}$' },
-          },
-        },
-      },
-    }, async ({ params, body, headers }, reply) => {
-      const author = participant(headers.authorization);
-      if (!author) {
-        return reply.code(401).send({ message: 'Choose a display name to join the chat.' });
-      }
-      const history = histories.get(params.channel);
-      if (!history) return reply.code(404).send({ message: 'Channel not found.' });
+  private pickAvatar() {
+    if (!this.availableAvatars.length) this.availableAvatars.push(...joinAvatars);
+    const [avatar] = this.availableAvatars.splice(randomInt(this.availableAvatars.length), 1);
+    return avatar;
+  }
 
-      const previous = history.find(item => item.nonce === body.nonce && item.message.author.id === author.id);
-      if (previous) return previous.message;
-
-      const message = postMessage(params.channel, author, body.text.trim(), body.nonce);
-      onMessage(message);
-      return reply.code(201).send(message);
-    });
-
-    app.get('/events', { exposeHeadRoute: false }, (request, reply) => {
-      reply.hijack();
-      const stream = reply.raw;
-      stream.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        'X-Accel-Buffering': 'no',
-      });
-      clients.add(stream);
-      stream.once('close', () => clients.delete(stream));
-      stream.write(event('snapshot', {
-        channels,
-        messages: [...histories.values()].flatMap(history => history.map(item => item.message)),
-      }));
-    });
-
-    const heartbeat = setInterval(() => broadcast(': heartbeat\n\n'), 15_000).unref();
-    app.addHook('preClose', async () => {
-      clearInterval(heartbeat);
-      for (const stream of clients) stream.end();
-      clients.clear();
-    });
-  };
-
-  return {
-    routes, postMessage, readChannel, listChannels: () => channels.slice(),
-  };
+  private broadcast(payload: string) {
+    for (const stream of this.clients) {
+      if (stream.writableNeedDrain) stream.destroy();
+      else if (!stream.destroyed && !stream.writableEnded) stream.write(payload);
+    }
+  }
 }

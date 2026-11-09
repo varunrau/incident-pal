@@ -2,8 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 import Fastify, { LogController } from 'fastify';
-import { createAmpersand, type AmpersandConfig } from './ampersand/agent.js';
-import { createChat } from './messenger/chat.js';
+import { Ampersand } from './ampersand/agent.js';
+import { Chat } from './messenger/chat.js';
+import { chatRoutes } from './messenger/routes/index.js';
 import { checkoutRoutes, startShoppers } from './payments/checkout.js';
 import { createTelemetry } from './payments/telemetry.js';
 import { createAgentTools } from './ampersand/tools/index.js';
@@ -11,17 +12,17 @@ import { level, object, setFlagBody } from './ampersand/tools/schemas.js';
 import type { Level, SetFlag } from './payments/types.js';
 
 export function buildApp({
-  simulate = true, logger = false, ampersand,
-}: { simulate?: boolean; logger?: boolean; ampersand: AmpersandConfig }) {
-  if (!ampersand?.apiKey?.trim()) {
+  simulate = true, logger = false, ampersandApiKey,
+}: { simulate?: boolean; logger?: boolean; ampersandApiKey: string }) {
+  if (!ampersandApiKey?.trim()) {
     throw new Error('Set AMPERSAND_API_KEY in .env or the shell before starting Incident Pal.');
   }
 
   const app = Fastify({ logger, logController: new LogController({ disableRequestLogging: true }) });
-  const chat = createChat();
+  const chat = new Chat();
   const telemetry = createTelemetry();
-  const tools = createAgentTools(app, chat, telemetry);
-  const agent = createAmpersand(ampersand, tools, app.log);
+  const agent = new Ampersand(ampersandApiKey, createAgentTools(chat, telemetry), app.log);
+  app.addHook('onReady', () => agent.start());
   app.addHook('preClose', () => agent.close());
 
   app.get<{ Querystring: { after?: string; sessionId?: string } }>('/api/ampersand/transcript', {
@@ -37,12 +38,17 @@ export function buildApp({
   });
 
   app.register(checkoutRoutes, { prefix: '/shop', telemetry });
-  app.register(chat.routes, {
+  app.register(chatRoutes, {
     prefix: '/api/chat',
+    chat,
     onMessage(message) {
-      agent.enqueue({
-        id: `chat:${message.id}`, sender: message.author.id, sender_name: message.author.name,
-        channel: message.channel, timestamp: Math.floor(message.at / 1_000), text: message.text,
+      agent.send({
+        id: `chat:${message.id}`,
+        text: message.text,
+        metadata: {
+          source: 'chat', sender: message.author.id, sender_name: message.author.name,
+          channel: message.channel, timestamp: Math.floor(message.at / 1_000),
+        },
       });
     },
   });
@@ -54,10 +60,8 @@ export function buildApp({
       ['/flags.js', './payments/client/flags.js', 'text/javascript'],
       ['/chat', '../messenger/public/chat.html', 'text/html'],
       ['/chat.js', './messenger/client/chat.js', 'text/javascript'],
-      ['/markdown-it.js', import.meta.resolve('markdown-it/browser'), 'text/javascript'],
       ['/ampersand', '../ampersand/public/ampersand.html', 'text/html'],
       ['/ampersand.js', './ampersand/client/ampersand.js', 'text/javascript'],
-      ['/shared/client/ui.js', './shared/client/ui.js', 'text/javascript'],
       ['/style.css', '../shared/public/style.css', 'text/css'],
       ['/pal.svg', '../shared/public/pal.svg', 'image/svg+xml'],
       ['/og.png', '../shared/public/og.png', 'image/png'],
@@ -104,14 +108,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  const { AMPERSAND_API_KEY, AMPERSAND_BASE_URL, AMPERSAND_MODEL } = process.env;
   try {
-    const app = buildApp({
-      logger: true,
-      ampersand: {
-        apiKey: AMPERSAND_API_KEY ?? '', baseUrl: AMPERSAND_BASE_URL, model: AMPERSAND_MODEL,
-      },
-    });
+    const app = buildApp({ logger: true, ampersandApiKey: process.env.AMPERSAND_API_KEY ?? '' });
     for (const signal of ['SIGINT', 'SIGTERM']) {
       process.once(signal, () => app.close().catch(error => {
         app.log.error(error);

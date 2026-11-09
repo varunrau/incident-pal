@@ -14,83 +14,9 @@
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="/style.css">
-  <script type="importmap">
-    { "imports": { "markdown-it/browser": "/markdown-it.js" } }
-  </script>
   <script type="module" src="/chat.js"></script>
 </head>
 <body>
-  <header class="masthead">
-    <div class="masthead-inner">
-      <div class="brand">
-        <img src="/pal.svg" width="26" height="26" alt="">
-        <strong>Incident Pal</strong>
-      </div>
-      <nav class="app-nav" aria-label="Main">
-        <a href="/">Dashboard</a>
-        <a href="/flags">Feature flags</a>
-        <a href="/chat" aria-current="page">Chat</a>
-        <a href="/ampersand">Ampersand</a>
-      </nav>
-    </div>
-  </header>
-  <main class="chat-workspace">
-    <aside class="channel-rail">
-      <div class="channel-navigation">
-        <div class="channel-toolbar">
-          <h2 id="channel-list-heading">Channels</h2>
-          <select id="channel-picker" aria-label="Channel" disabled>
-            <option>Connecting…</option>
-          </select>
-          <button type="button" id="new-channel" class="new-channel" aria-label="New channel" title="New channel" disabled>
-            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-        <nav id="channel-list" aria-labelledby="channel-list-heading"></nav>
-      </div>
-      <div class="chat-identity" id="chat-identity" hidden>
-        <span id="chat-author"></span>
-        <button type="button" class="text-button" id="change-name">Change</button>
-      </div>
-    </aside>
-    <section class="conversation" aria-labelledby="channel-name">
-      <header class="channel-header">
-        <h1 id="channel-name">Chat</h1>
-        <p id="channel-topic" hidden></p>
-      </header>
-      <div class="chat-history" id="chat-history" role="log" aria-label="Messages" tabindex="0">
-        <p class="chat-empty">Connecting to chat…</p>
-      </div>
-      <p id="chat-connection" class="chat-notice" role="status" hidden>Reconnecting to chat…</p>
-      <p id="chat-error" class="chat-notice error-text" role="status" hidden></p>
-      <form id="compose-message" class="chat-composer" hidden>
-        <input id="message-text" type="text" name="message" aria-label="Message" maxlength="2000" enterkeyhint="send" autocomplete="off">
-      </form>
-    </section>
-  </main>
-  <dialog id="join-dialog" class="chat-dialog" aria-labelledby="join-heading">
-    <form id="join-chat" class="chat-dialog-form">
-      <h2 id="join-heading">Join chat</h2>
-      <label for="display-name">Display name</label>
-      <input id="display-name" name="name" maxlength="40" required autocomplete="off" autofocus>
-      <p id="join-error" class="error-text" role="status" hidden></p>
-      <div class="dialog-actions">
-        <button type="button" id="cancel-join" class="text-button">Cancel</button>
-        <button type="submit" class="dialog-submit">Join chat</button>
-      </div>
-    </form>
-  </dialog>
-  <dialog id="channel-dialog" class="chat-dialog" aria-labelledby="new-channel-heading">
-    <form id="create-channel" class="chat-dialog-form">
-      <h2 id="new-channel-heading">New channel</h2>
-      <label for="channel-input">Channel name</label>
-      <input id="channel-input" name="name" maxlength="60" required autocomplete="off" autofocus>
-      <p id="channel-error" class="error-text" role="status" hidden></p>
-      <div class="dialog-actions">
-        <button type="button" id="cancel-channel" class="text-button">Cancel</button>
-        <button type="submit" class="dialog-submit">Create channel</button>
-      </div>
-    </form>
-  </dialog>
+  <div id="root"></div>
 </body>
 </html>

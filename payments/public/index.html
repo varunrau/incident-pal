@@ -17,59 +17,6 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <header class="masthead">
-    <div class="masthead-inner">
-      <div class="brand">
-        <img src="/pal.svg" width="26" height="26" alt="">
-        <strong>Incident Pal</strong>
-      </div>
-      <nav class="app-nav" aria-label="Main">
-        <a href="/" aria-current="page">Dashboard</a>
-        <a href="/flags">Feature flags</a>
-        <a href="/chat">Chat</a>
-        <a href="/ampersand">Ampersand</a>
-      </nav>
-    </div>
-  </header>
-  <main class="dashboard">
-    <p id="connection-label" class="connection" role="status" hidden></p>
-    <section class="panel volume-panel" aria-labelledby="volume-heading">
-      <div class="section-heading">
-        <h1 id="volume-heading">Log volume</h1>
-        <span class="window-label">Last 2 minutes</span>
-      </div>
-      <dl class="counts">
-        <div><dt>Total requests</dt><dd id="log-total">0</dd></div>
-        <div><dt>Non-error requests</dt><dd id="log-info">0</dd></div>
-        <div><dt>Error requests</dt><dd id="log-errors" class="error-text">0</dd></div>
-      </dl>
-      <figure class="chart">
-        <svg id="volume-chart" viewBox="0 0 834 170" role="img" aria-label="Log volume over the last two minutes"></svg>
-        <figcaption>
-          <div class="legend"><span><i class="key info"></i>Non-error</span><span><i class="key error"></i>Error</span></div>
-        </figcaption>
-      </figure>
-    </section>
-    <section class="panel logs-panel" aria-labelledby="logs-heading">
-      <div class="section-heading logs-heading">
-        <h2 id="logs-heading">Request logs</h2>
-        <div id="log-filters" class="segments" role="group" aria-label="Filter request logs">
-          <button type="button" data-level="" aria-pressed="true">All requests</button>
-          <button type="button" data-level="error" aria-pressed="false">Errors</button>
-        </div>
-      </div>
-      <div id="inspection" class="inspection" hidden>
-        <span>Log list paused for inspection</span>
-        <button type="button" id="resume-logs">Resume live logs</button>
-      </div>
-      <div class="table-scroll">
-        <table aria-label="Checkout API request logs">
-          <colgroup><col class="time-col"><col class="user-col"><col class="request-col"><col class="status-col"><col></colgroup>
-          <thead><tr><th scope="col">Time</th><th scope="col">User</th><th scope="col">Request</th><th scope="col">Status</th><th scope="col">Duration</th></tr></thead>
-          <tbody id="log-rows"><tr><td colspan="5">Waiting for requests…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
-  </main>
+  <div id="root"></div>
 </body>
 </html>

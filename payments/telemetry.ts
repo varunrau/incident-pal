@@ -8,11 +8,10 @@ const BUCKET_MS = 5_000;
 const BUCKET_COUNT = 24;
 const LOG_LIMIT = 10_000;
 
-function matches(log: RequestLog, { level, userId, requestId, flowId, route }: LogFilters) {
+function matches(log: RequestLog, { level, userId, requestId, route }: LogFilters) {
   return (!level || log.level === level)
     && (!userId || log.userId === userId)
     && (!requestId || log.requestId === requestId)
-    && (!flowId || log.flowId === flowId)
     && (!route || log.route === route);
 }
 

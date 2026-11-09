@@ -7,11 +7,11 @@ A local TypeScript and Fastify demo for [Incident collaborator](https://app.noti
 | Directory | Component | Contents |
 | --- | --- | --- |
 | `payments/` | Payments app | Shop routes, request logs and feature flags (`telemetry.ts`), the dashboard and flags pages |
-| `messenger/` | Slack-like messenger | Channels, participants, the SSE event stream, the chat page and avatars |
-| `ampersand/` | Ampersand agent | Session lifecycle (`agent.ts`), system prompt, agent tools, and the transcript page |
+| `messenger/` | Slack-like messenger | The `Chat` model (`chat.ts`), one file per HTTP route (`routes/`), the chat page and avatars |
+| `ampersand/` | Ampersand agent | The `Ampersand` session class (`agent.ts`), typed errors, system prompt, agent tools, and the transcript page |
 | `shared/` | Shared | Demo shopper fixtures, browser UI helpers, styles, fonts and icons |
 
-`server.ts` creates the single Fastify app that connects the three components.
+`server.ts` creates the single Fastify app that connects the three components. Each page is a React app under its component's `client/` directory, and `npm run build` bundles them with esbuild.
 
 ## Run locally
 
@@ -49,7 +49,7 @@ For a demo with people on the same trusted network, run `HOST=0.0.0.0 npm start`
 
 ## Ampersand incident agent
 
-The app uses one [Ampersand](https://ampersand.humansand.ai/docs/GUIDES.html) agent. `AMPERSAND_BASE_URL` and `AMPERSAND_MODEL` default to the hosted API and `ampersand-v0.1`.
+The app uses one [Ampersand](https://ampersand.humansand.ai/docs/GUIDES.html) agent on `ampersand-v0.1`. The server creates its session at startup, seeded with a short message because Ampersand requires input to create one, and will not start if Ampersand rejects the request.
 
 1. Open **Chat** and join with a display name. Turn on **Strict payment validation** in **Feature flags**.
 2. Ask Ampersand to investigate in **#incident-response** once failures appear in **Request logs**.
@@ -63,7 +63,7 @@ One Ampersand session receives new human messages across all channels. The agent
 
 ### Tool interface
 
-`GET /api/tools` lists the Ampersand tool schemas. The read-only HTTP endpoints support `POST /api/tools/<name>` with a JSON object.
+Ampersand calls these tools through its session, and calls in the same turn run in parallel.
 
 | Tool | Example input |
 | --- | --- |
@@ -76,4 +76,4 @@ One Ampersand session receives new human messages across all channels. The agent
 
 `read_channel` and `query_logs` return newest first. Pass `nextBefore` as `before` for older results. `tail_logs` returns oldest first within a batch. Poll with the returned cursor and the same filters. `missed` indicates that some entries aged out.
 
-`update_flag`, `post_message`, and `pass` run inside the authenticated Ampersand session bridge.
+`update_flag`, `post_message`, and `pass` are also available to the agent.

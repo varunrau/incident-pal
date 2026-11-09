@@ -51,7 +51,6 @@ export interface LogFilters {
   level?: Level;
   userId?: string;
   requestId?: string;
-  flowId?: string;
   route?: Route;
   limit?: number;
 }

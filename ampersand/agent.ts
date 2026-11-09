@@ -1,401 +1,308 @@
-import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger } from 'fastify';
-import type { createAgentTools } from './tools/index.js';
+import OpenAI from 'openai';
+import type {
+  AgentSession, AgentSessionInputMessageParam, AgentSessionInputParam, TokenUsage,
+} from 'openai/resources/beta/agents/agents.js';
+import { AmpersandClosedError, SessionChangedError, SessionNotFoundError, TranscriptLoadError } from './errors.js';
 import type { AmpersandTranscript } from './types.js';
 
-export interface AmpersandConfig {
-  apiKey: string;
-  baseUrl?: string;
-  model?: string;
-}
+export const AMPERSAND_BASE_URL = 'https://ampersand.humansand.ai/v1';
+const MODEL = 'ampersand-v0.1';
+
+const REQUEST_TIMEOUT_MS = 15_000;
+const STREAM_RECONNECT_MS = 180_000;
+const CLOSE_TIMEOUT_MS = 2_000;
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_MAX_MS = 30_000;
+const BACKOFF_MAX_DOUBLINGS = 6;
+const TRANSCRIPT_PAGE_SIZE = 25;
+
+// Ampersand requires non-empty input to create a session, and that input starts a turn.
+const SESSION_START_INPUT: AgentInput = {
+  id: 'session-start',
+  text: 'This session has started. Nothing needs a response yet, so finish quietly and wait for the next message.',
+  metadata: { source: 'system', sender_name: 'System' },
+};
+const REJECTED_INPUT_STATUSES = [400, 413];
+
+// https://ampersand.humansand.ai/docs/PRICING.html
+const USD_PER_MILLION_INPUT_TOKENS = 1;
+const USD_PER_MILLION_CACHED_TOKENS = 0.2;
+const USD_PER_MILLION_OUTPUT_TOKENS = 5.2;
 
 export interface AgentInput {
   id: string;
-  sender: string;
-  sender_name: string;
-  channel: string;
-  timestamp: number;
   text: string;
+  metadata: Record<string, string | number>;
 }
 
-interface Action {
-  type: string;
-  turn_id: string;
-  call_id: string;
-  name: string;
-  arguments: unknown;
+export interface AgentTools {
+  definitions: { type: 'function'; name: string; description: string; parameters: Record<string, unknown> }[];
+  execute(name: string, args: unknown): object | Promise<object>;
 }
 
-interface SessionState {
-  id: string;
-  status: 'idle' | 'in_progress' | 'requires_action' | 'failed';
-  error?: string | null;
-  metadata?: Record<string, string>;
-  required_actions?: Action[];
-  usage?: {
-    input_tokens: number;
-    input_tokens_details?: { cached_tokens: number };
-    output_tokens: number;
-  } | null;
-}
+type FunctionCall = Extract<AgentSession['required_actions'][number], { type: 'function_call' }>;
+type ToolResult = Extract<AgentSessionInputParam, { type: 'agent.session.input.tool_result' }>;
 
-type AgentTools = ReturnType<typeof createAgentTools>;
-type Receipt = { type: 'agent.session.input.tool_result'; turn_id: string; call_id: string; success: boolean; output?: string; error?: string };
-interface Session {
+interface LiveSession {
   id: string;
   controller: AbortController;
   // Tool calls (`turn_id:call_id`) already executed in this session. A call runs at most once,
-  // however often it reappears in required_actions; its receipt is retried until Ampersand
+  // however often it reappears in required_actions; its result is retried until Ampersand
   // accepts it or the session ends.
   handled: Set<string>;
 }
 
-// The one Ampersand session this server drives.
-//   idle     → no session; the next queued input creates one.
-//   creating → a create request is in flight or being retried. `attempt` is stored in the
-//              session metadata. Once a create fails in a way that may have succeeded
-//              (`ambiguous`), the next try looks for that session before creating another.
-//   active   → a live session that receives chat input and tool results. A failed or missing
-//              session returns to idle.
-//   closed   → shutdown; nothing new starts.
-type Lifecycle =
-  | { kind: 'idle' }
-  | { kind: 'creating'; attempt: string; ambiguous: boolean }
-  | { kind: 'active'; session: Session }
-  | { kind: 'closed' };
+const callKey = (call: FunctionCall) => `${call.turn_id}:${call.call_id}`;
+const replaceNul = (text: string) => text.replaceAll('\0', '�');
 
-class ApiError extends Error {
-  constructor(readonly status: number, readonly retryMs: number, operation: string) {
-    super(`Ampersand ${operation} returned HTTP ${status}`);
-  }
-}
-
-function inputMessage({ text, ...metadata }: AgentInput) {
-  return {
-    role: 'user', content: [{ type: 'input_text', text: text.replaceAll('\0', '\uFFFD') }],
-    metadata: { ...metadata, source: 'chat', sender_name: metadata.sender_name.replaceAll('\0', '\uFFFD') },
+function toMessage({ id, text, metadata }: AgentInput) {
+  const cleaned = Object.entries(metadata).map(([key, value]) => [key, typeof value === 'string' ? replaceNul(value) : value]);
+  // `metadata` is an Ampersand extension that the OpenAI types do not declare.
+  const message: AgentSessionInputMessageParam & { metadata: object } = {
+    role: 'user',
+    content: [{ type: 'input_text', text: replaceNul(text) }],
+    metadata: { ...Object.fromEntries(cleaned), id },
   };
+  return message;
 }
 
-async function* readEvents(response: Response) {
-  if (!response.body) throw new Error('Ampersand returned an empty event stream');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      buffer += decoder.decode(value, { stream: true });
-      let delimiter: RegExpExecArray | null;
-      while ((delimiter = /\r?\n\r?\n/.exec(buffer))) {
-        const frame = buffer.slice(0, delimiter.index);
-        buffer = buffer.slice(delimiter.index + delimiter[0].length);
-        const data = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
-          .map(line => line.slice(5).trimStart()).join('\n');
-        if (data && data !== '[DONE]') yield JSON.parse(data) as {
-          type: string;
-          session?: SessionState;
-          turn?: { id: string; error?: { code?: string; message?: string } };
-        };
-      }
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
+function estimateCostUsd(usage: TokenUsage) {
+  const cached = usage.input_tokens_details?.cached_tokens;
+  if (cached === undefined) return null;
+  return ((usage.input_tokens - cached) * USD_PER_MILLION_INPUT_TOKENS
+    + cached * USD_PER_MILLION_CACHED_TOKENS
+    + usage.output_tokens * USD_PER_MILLION_OUTPUT_TOKENS) / 1_000_000;
 }
 
-export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log: FastifyBaseLogger) {
-  const base = (config.baseUrl ?? 'https://ampersand.humansand.ai/v1').replace(/\/+$/, '');
-  const model = config.model ?? 'ampersand-v0.1';
-  const { definitions } = tools;
-  const toolNames = new Set(definitions.map(tool => tool.name));
-  const instructions = readFileSync(new URL('../../ampersand/prompts/ampersand.md', import.meta.url), 'utf8').trimEnd();
-  const lifetime = new AbortController();
-  const queue: AgentInput[] = [];
-  let state: Lifecycle = { kind: 'idle' };
-  let delivering = false;
-  // Functions rather than inline checks: `state` changes across awaits, which control-flow
-  // narrowing does not see.
-  const activeSession = () => state.kind === 'active' ? state.session : undefined;
-  const current = (active: Session) => state.kind === 'active' && state.session === active;
-  const closed = () => state.kind === 'closed';
+function summarizeUsage(usage: TokenUsage | null): AmpersandTranscript['usage'] {
+  if (!usage) return null;
+  return { inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, estimatedCostUsd: estimateCostUsd(usage) };
+}
 
-  async function api(path: string, options: {
-    body?: object;
-    key?: string;
-    method?: string;
-    signal?: AbortSignal;
-    stream?: boolean;
-  } = {}) {
-    const response = await fetch(`${base}/agents/sessions${path}`, {
-      method: options.method ?? (options.body ? 'POST' : 'GET'),
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`, 'OpenAI-Beta': 'agents=v1',
-        Accept: options.stream ? 'text/event-stream' : 'application/json',
-        ...(options.body && { 'Content-Type': 'application/json' }),
-        ...(options.key && { 'Idempotency-Key': options.key }),
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: AbortSignal.any([options.signal ?? lifetime.signal, AbortSignal.timeout(options.stream ? 180_000 : 15_000)]),
-    });
-    if (!response.ok) {
-      const retryAfter = response.headers.get('retry-after');
-      const retryMs = Number(response.headers.get('retry-after-ms')) ||
-        (retryAfter ? (Number.isFinite(Number(retryAfter)) ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now()) : 0);
-      await response.body?.cancel().catch(() => {});
-      throw new ApiError(response.status, retryMs || 0, options.method ?? (options.body ? 'POST' : 'GET'));
-    }
-    return response;
+async function backoff(failures: number, signal: AbortSignal) {
+  const wait = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.min(failures, BACKOFF_MAX_DOUBLINGS));
+  await delay(wait, undefined, { signal, ref: false }).catch(() => {});
+}
+
+// Owns the one Ampersand session this server drives. `start` opens it. If it later fails or
+// disappears, the next input opens a replacement.
+export class Ampersand {
+  private readonly sessions: OpenAI['beta']['agents']['sessions'];
+  private readonly instructions = readFileSync(new URL('../../ampersand/prompts/ampersand.md', import.meta.url), 'utf8').trimEnd();
+  private readonly toolNames: Set<string>;
+  private readonly lifetime = new AbortController();
+  private readonly queue: AgentInput[] = [];
+  private session?: LiveSession;
+  private closed = false;
+  private draining = false;
+
+  constructor(apiKey: string, private readonly tools: AgentTools, private readonly log: FastifyBaseLogger) {
+    this.sessions = new OpenAI({ apiKey, baseURL: AMPERSAND_BASE_URL, timeout: REQUEST_TIMEOUT_MS }).beta.agents.sessions;
+    this.toolNames = new Set(tools.definitions.map(tool => tool.name));
   }
 
-  async function wait(error: unknown, attempt: number, signal: AbortSignal) {
-    const backoff = Math.min(30_000, 500 * 2 ** Math.min(attempt, 6));
-    const retryMs = error instanceof ApiError ? error.retryMs : 0;
-    await delay(Math.max(backoff, retryMs), undefined, { signal, ref: false }).catch(() => {});
+  async start() {
+    await this.open();
   }
 
-  const path = (id: string) => `/${encodeURIComponent(id)}`;
-
-  async function saved(active: Session) {
-    return await (await api(path(active.id), { signal: active.controller.signal })).json() as SessionState;
+  send(input: AgentInput) {
+    this.queue.push(input);
+    void this.drain();
   }
 
-  async function find(attempt: string, signal?: AbortSignal) {
-    const page = await (await api('?limit=100&order=desc', { signal })).json() as { data: SessionState[] };
-    return page.data.find(item => item.metadata?.incident_pal_creation === attempt);
-  }
-
-  async function remove(id: string, signal?: AbortSignal) {
-    await api(path(id), { method: 'DELETE', signal }).catch(() => {});
-  }
-
-  async function transcript(after?: string, sessionId?: string): Promise<AmpersandTranscript> {
-    const active = activeSession();
-    const changed = () => Object.assign(new Error('The session changed. Refresh the transcript.'), { statusCode: 409 });
-    if (after && (!active || active.id !== sessionId)) throw changed();
-    const result: AmpersandTranscript = {
-      sessionId: active?.id ?? null, instructions, model, usage: null, items: [], nextCursor: null,
+  async transcript(after?: string, sessionId?: string): Promise<AmpersandTranscript> {
+    const session = this.session;
+    if (after && session?.id !== sessionId) throw new SessionChangedError();
+    const transcript: AmpersandTranscript = {
+      sessionId: session?.id ?? null, instructions: this.instructions, model: MODEL, usage: null, items: [], nextCursor: null,
     };
-    if (!active) return result;
+    if (!session) return transcript;
 
-    const params = new URLSearchParams({ limit: '25', order: 'desc' });
-    if (after) params.set('after', after);
+    const options = { signal: this.lifetime.signal };
     try {
-      const [snapshot, page] = await Promise.all([
-        saved(active),
-        api(`${path(active.id)}/items?${params}`, { signal: active.controller.signal }).then(async response =>
-          await response.json() as { data: AmpersandTranscript['items']; has_more: boolean; last_id: string | null }),
+      const [saved, page] = await Promise.all([
+        this.sessions.retrieve(session.id, options),
+        this.sessions.items.list(session.id, { limit: TRANSCRIPT_PAGE_SIZE, order: 'desc', after }, options),
       ]);
-      result.items = page.data;
-      result.nextCursor = page.has_more ? page.last_id : null;
-      if (snapshot.usage) {
-        const { input_tokens: inputTokens, output_tokens: outputTokens, input_tokens_details } = snapshot.usage;
-        const cached = input_tokens_details?.cached_tokens;
-        // https://ampersand.humansand.ai/docs/PRICING.html
-        const estimatedCostUsd = cached !== undefined && ['ampersand-v0.1', 'ampersand-tutor-v0.1'].includes(model)
-          ? (inputTokens - cached + cached * 0.20 + outputTokens * 5.20) / 1_000_000
-          : null;
-        result.usage = { inputTokens, outputTokens, estimatedCostUsd };
-      }
-    } catch (error) {
-      if (!current(active)) throw changed();
-      if (error instanceof ApiError && error.status === 404) {
-        throw Object.assign(new Error('Ampersand could not find the active session.'), { statusCode: 502 });
-      }
-      throw Object.assign(new Error('Could not load the transcript from Ampersand.'), { statusCode: 502 });
+      transcript.usage = summarizeUsage(saved.usage);
+      transcript.items = page.data;
+      transcript.nextCursor = page.hasNextPage() ? page.data.at(-1)?.id ?? null : null;
+      return transcript;
+    } catch (cause) {
+      throw cause instanceof OpenAI.NotFoundError ? new SessionNotFoundError({ cause }) : new TranscriptLoadError({ cause });
     }
-    if (!current(active)) throw changed();
-    return result;
   }
 
-  async function submit(active: Session, event: object, key: string) {
-    await api(`${path(active.id)}/events`, {
-      body: { events: [event] }, key, signal: active.controller.signal,
-    });
+  async close() {
+    const session = this.session;
+    this.closed = true;
+    this.session = undefined;
+    this.lifetime.abort();
+    session?.controller.abort();
+    if (session) await this.remove(session.id, AbortSignal.timeout(CLOSE_TIMEOUT_MS));
   }
 
-  // active → idle. The next queued input creates a fresh session.
-  function end(active: Session) {
-    if (!current(active)) return;
-    active.controller.abort();
-    state = { kind: 'idle' };
-    void deliver();
-    void remove(active.id);
+  private async open() {
+    // `ampersand` is an extension that the OpenAI types do not declare.
+    const agent = {
+      model: MODEL, instructions: this.instructions, tools: this.tools.definitions, ampersand: { compaction: 'auto', allow_silent_completion: false },
+    };
+    const created = await this.sessions.create({
+      agent, environment: { type: 'none' }, input: [toMessage(SESSION_START_INPUT)],
+    }, { signal: this.lifetime.signal });
+    if (this.closed) {
+      void this.remove(created.id, AbortSignal.timeout(CLOSE_TIMEOUT_MS));
+      throw new AmpersandClosedError();
+    }
+    const session: LiveSession = { id: created.id, controller: new AbortController(), handled: new Set() };
+    this.session = session;
+    void this.watch(session);
+    return session;
   }
 
-  async function sendReceipt(active: Session, action: Action, key: string, receipt: Receipt) {
-    const { signal } = active.controller;
-    for (let attempt = 0; !signal.aborted; attempt++) {
+  private async remove(id: string, signal = this.lifetime.signal) {
+    await this.sessions.delete(id, { signal, maxRetries: 0 }).catch(() => {});
+  }
+
+  private end(session: LiveSession) {
+    if (this.session !== session) return;
+    session.controller.abort();
+    this.session = undefined;
+    void this.remove(session.id);
+    void this.drain();
+  }
+
+  // True when a failed call means this session has nothing left to retry.
+  private sessionEnded(session: LiveSession, error: unknown) {
+    if (session.controller.signal.aborted) return true;
+    if (!(error instanceof OpenAI.NotFoundError)) return false;
+    this.end(session);
+    return true;
+  }
+
+  // Repeats `attempt` with backoff until it returns or the session ends. `attempt` calls its
+  // argument after making progress, which resets the backoff. `isSettled` can stop the retries
+  // when the failure shows there is no more work to do.
+  private async retry(
+    session: LiveSession,
+    message: string,
+    attempt: (progressed: () => void) => Promise<void>,
+    isSettled: (error: unknown) => Promise<boolean> = async () => false,
+  ) {
+    let failures = 0;
+    while (!session.controller.signal.aborted) {
       try {
-        await submit(active, receipt, `tool:${key}`);
-        return;
+        return await attempt(() => { failures = 0; });
       } catch (error) {
-        if (signal.aborted) return;
-        if (error instanceof ApiError && error.status === 404) return end(active);
-        if (error instanceof ApiError && [400, 409].includes(error.status)) {
-          const latest = await saved(active).catch(() => undefined);
-          if (latest && !latest.required_actions?.some(item => item.turn_id === action.turn_id && item.call_id === action.call_id)) {
-            return;
-          }
-        }
-        log.warn({ err: error, tool: action.name }, 'Retrying Ampersand tool receipt');
-        await wait(error, attempt, signal);
+        if (this.sessionEnded(session, error) || await isSettled(error)) return;
+        this.log.warn({ err: error }, message);
+        await backoff(failures++, session.controller.signal);
       }
     }
   }
 
-  function handleActions(active: Session, actions: Action[] = []) {
-    if (!current(active)) return;
-    for (const action of actions) {
-      if (!toolNames.has(action.name)) continue;
-      const key = `${action.turn_id}:${action.call_id}`;
-      if (active.handled.has(key)) continue;
-      active.handled.add(key);
-      const target = { type: 'agent.session.input.tool_result' as const, turn_id: action.turn_id, call_id: action.call_id };
-      let receipt: Receipt;
-      try {
-        if (action.type !== 'function_call') throw new Error('Only function tools are supported.');
-        receipt = { ...target, success: true, output: JSON.stringify(tools.execute(action.name, action.arguments)) };
-      } catch (error) {
-        receipt = { ...target, success: false, error: error instanceof Error ? error.message : 'Tool failed.' };
-      }
-      void sendReceipt(active, action, key, receipt);
-    }
-  }
-
-  function handleState(active: Session, snapshot: SessionState) {
-    if (!current(active)) return;
-    if (snapshot.status === 'failed') {
-      log.warn({ reason: snapshot.error }, 'Ampersand session failed');
-      end(active);
-    } else handleActions(active, snapshot.required_actions);
-  }
-
-  async function watch(active: Session) {
-    const { signal } = active.controller;
-    for (let attempt = 0; !signal.aborted; attempt++) {
-      try {
-        const response = await api(`${path(active.id)}/events`, { stream: true, signal });
-        // The stream has no replay cursor. Reconcile after opening it so calls
-        // issued before or during reconnection are still handled.
-        void saved(active).then(snapshot => handleState(active, snapshot)).catch(error => {
-          if (error instanceof ApiError && error.status === 404) end(active);
-          else if (!signal.aborted) log.warn({ err: error }, 'Could not reconcile Ampersand session');
-        });
-        for await (const event of readEvents(response)) {
-          attempt = 0;
-          if (event.session) handleState(active, event.session);
-          if (event.type === 'agent.session.turn.failed') {
-            log.warn({ turnId: event.turn?.id, failure: event.turn?.error }, 'Ampersand turn failed');
-          }
-        }
-      } catch (error) {
-        if (signal.aborted) return;
-        if (error instanceof ApiError && error.status === 404) return end(active);
-        log.warn({ err: error }, 'Reconnecting Ampersand event stream');
-        await wait(error, attempt, signal);
-        continue;
-      }
-      await wait(undefined, attempt, signal);
-    }
-  }
-
-  // idle | creating → creating. Session creation has no idempotency key, so a create whose
-  // response was lost is found by its attempt ID before being retried.
-  async function create(input: AgentInput) {
-    const previous = state.kind === 'creating' ? state : undefined;
-    if (previous?.ambiguous) {
-      const existing = await find(previous.attempt);
-      if (existing) return existing;
-    }
-    const attempt = previous?.attempt ?? randomUUID();
-    state = { kind: 'creating', attempt, ambiguous: previous?.ambiguous ?? false };
+  private async drain() {
+    if (this.draining) return;
+    this.draining = true;
     try {
-      return await (await api('', { body: {
-        agent: {
-          model, instructions, tools: definitions,
-          ampersand: { compaction: 'auto' },
-        },
-        environment: { type: 'none' },
-        metadata: { incident_pal_creation: attempt },
-        input: [inputMessage(input)],
-      } })).json() as SessionState;
-    } catch (error) {
-      if (state.kind === 'creating' && state.attempt === attempt) {
-        const rejected = error instanceof ApiError && error.status < 500 && error.status !== 408;
-        state = rejected ? { kind: 'idle' } : { kind: 'creating', attempt, ambiguous: true };
-      }
-      throw error;
-    }
-  }
-
-  async function deliver() {
-    if (delivering) return;
-    delivering = true;
-    try {
-      for (let attempt = 0; queue.length && !closed();) {
-        const input = queue[0];
-        const active = activeSession();
+      let failures = 0;
+      while (this.queue.length && !this.closed) {
+        const input = this.queue[0];
+        let session: LiveSession | undefined;
         try {
-          if (!active) {
-            const created = await create(input);
-            if (closed()) {
-              void remove(created.id, AbortSignal.timeout(2_000));
-              return;
-            }
-            const session: Session = { id: created.id, controller: new AbortController(), handled: new Set() };
-            state = { kind: 'active', session };
-            queue.shift();
-            handleState(session, created);
-            if (current(session)) void watch(session);
-          } else {
-            await submit(active, { type: 'agent.session.input.message', input: [inputMessage(input)] }, `input:${input.id}`);
-            if (!current(active)) continue;
-            queue.shift();
-          }
-          attempt = 0;
+          session = this.session ?? await this.open();
+          await this.sessions.events.create(session.id, {
+            events: [{ type: 'agent.session.input.message', input: [toMessage(input)] }],
+            'Idempotency-Key': `input:${input.id}`,
+          }, { signal: session.controller.signal });
+          if (this.session === session) this.queue.shift();
+          failures = 0;
         } catch (error) {
-          if (closed()) return;
-          if (active && !current(active)) continue;
-          if (active && error instanceof ApiError && error.status === 404) {
-            end(active);
+          if (this.closed || (session && this.sessionEnded(session, error))) continue;
+          this.log.warn({ err: error, inputId: input.id }, 'Could not deliver Ampersand input');
+          if (session && error instanceof OpenAI.APIError && REJECTED_INPUT_STATUSES.includes(error.status)) {
+            this.queue.shift();
             continue;
           }
-          log.warn({ err: error, inputId: input.id }, 'Could not deliver Ampersand input');
-          if (active && error instanceof ApiError && [400, 413].includes(error.status)) {
-            queue.shift();
-            continue;
-          }
-          await wait(error, attempt++, lifetime.signal);
+          await backoff(failures++, this.lifetime.signal);
         }
       }
     } finally {
-      delivering = false;
+      this.draining = false;
     }
   }
 
-  return {
-    transcript,
-    enqueue(input: AgentInput) {
-      queue.push(input);
-      void deliver();
-    },
-    // any → closed. Deletes the live session, or one an interrupted create may have made.
-    async close() {
-      const previous = state;
-      state = { kind: 'closed' };
-      lifetime.abort();
-      const signal = AbortSignal.timeout(2_000);
-      if (previous.kind === 'active') {
-        previous.session.controller.abort();
-        await remove(previous.session.id, signal);
-      } else if (previous.kind === 'creating') {
-        const existing = await find(previous.attempt, signal).catch(() => undefined);
-        if (existing) await remove(existing.id, signal);
+  private async watch(session: LiveSession) {
+    const { signal } = session.controller;
+    while (!signal.aborted) {
+      await this.retry(session, 'Reconnecting Ampersand event stream', progressed => this.followEvents(session, progressed));
+      await backoff(0, signal);
+    }
+  }
+
+  private async followEvents(session: LiveSession, progressed: () => void) {
+    const { signal } = session.controller;
+    const stream = await this.sessions.events.stream(session.id, {
+      maxRetries: 0, signal: AbortSignal.any([signal, AbortSignal.timeout(STREAM_RECONNECT_MS)]),
+    });
+    // The stream has no replay cursor. Reconcile after opening it so calls issued before or
+    // during reconnection are still handled.
+    void this.sessions.retrieve(session.id, { signal }).then(saved => this.applyState(session, saved)).catch(error => {
+      if (!this.sessionEnded(session, error)) this.log.warn({ err: error }, 'Could not reconcile Ampersand session');
+    });
+    for await (const event of stream) {
+      progressed();
+      if ('session' in event) this.applyState(session, event.session);
+      if (event.type === 'agent.session.turn.failed') {
+        this.log.warn({ turnId: event.turn.id, failure: event.turn.error }, 'Ampersand turn failed');
       }
-    },
-  };
+    }
+  }
+
+  private applyState(session: LiveSession, saved: AgentSession) {
+    if (this.session !== session) return;
+    if (saved.status === 'failed') {
+      this.log.warn({ reason: saved.error }, 'Ampersand session failed');
+      this.end(session);
+    } else {
+      this.runToolCalls(session, saved.required_actions);
+    }
+  }
+
+  // Runs every new tool call concurrently. A call is marked handled before anything awaits, so
+  // a repeated state update cannot start it twice.
+  private runToolCalls(session: LiveSession, actions: AgentSession['required_actions'] = []) {
+    const calls = actions.filter((action): action is FunctionCall =>
+      action.type === 'function_call' && this.toolNames.has(action.name) && !session.handled.has(callKey(action)));
+    for (const call of calls) {
+      session.handled.add(callKey(call));
+      void this.executeAndReport(session, call);
+    }
+  }
+
+  private async executeAndReport(session: LiveSession, call: FunctionCall) {
+    const result = await this.execute(call);
+    await this.retry(session, `Retrying Ampersand tool result for ${call.name}`, async () => {
+      await this.sessions.events.create(session.id, {
+        events: [result], 'Idempotency-Key': `tool:${callKey(call)}`,
+      }, { signal: session.controller.signal });
+    }, async error => {
+      if (!(error instanceof OpenAI.BadRequestError || error instanceof OpenAI.ConflictError)) return false;
+      const saved = await this.sessions.retrieve(session.id, { signal: session.controller.signal }).catch(() => undefined);
+      return saved !== undefined && !saved.required_actions.some(action =>
+        action.type === 'function_call' && callKey(action) === callKey(call));
+    });
+  }
+
+  private async execute({ turn_id, call_id, name, arguments: args }: FunctionCall): Promise<ToolResult> {
+    const type = 'agent.session.input.tool_result';
+    try {
+      return { type, turn_id, call_id, success: true, output: JSON.stringify(await this.tools.execute(name, args)) };
+    } catch (error) {
+      return { type, turn_id, call_id, success: false, error: error instanceof Error ? error.message : 'Tool failed.' };
+    }
+  }
 }

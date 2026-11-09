@@ -4,10 +4,11 @@
     "module": "NodeNext",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
+    "jsx": "react-jsx",
     "rootDir": ".",
     "outDir": "dist",
     "strict": true,
     "noEmitOnError": true
   },
-  "include": ["*.ts", "ampersand/**/*.ts", "payments/**/*.ts", "messenger/**/*.ts", "shared/**/*.ts", "test/**/*.ts"]
+  "include": ["*.ts", "ampersand/**/*", "payments/**/*", "messenger/**/*", "shared/**/*", "test/**/*"]
 }

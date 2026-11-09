@@ -28,6 +28,7 @@
 * { box-sizing: border-box; }
 ::selection { color: var(--ink); background: var(--selection); }
 body { margin: 0; font-size: 14px; }
+#root { display: contents; }
 button { font: inherit; cursor: pointer; }
 :is(button, summary, a, select, input, textarea, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:disabled { cursor: default; }

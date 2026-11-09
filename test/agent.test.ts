@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from 'node:http';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { buildApp } from '../server.js';
+import { routeAmpersandTo } from './route-ampersand.js';
 import type { AmpersandTranscript } from '../ampersand/types.js';
 import type { ChatSession } from '../messenger/types.js';
 
@@ -55,7 +56,8 @@ async function mockAmpersand() {
       if (searchParams.get('after') === 'call-item') {
         return send(200, { data: [{ ...inputs[0], type: 'message', role: 'user' }], last_id: 'input-item', has_more: false });
       }
-      const call = calls.at(-1)!;
+      const call = calls.at(-1);
+      if (!call) return send(200, { data: [], last_id: null, has_more: false });
       const receipt = receipts.get(call.call_id)!;
       return send(200, {
         data: [
@@ -78,13 +80,14 @@ async function mockAmpersand() {
     if (request.method === 'POST' && route === '/agents/sessions') {
       const { agent, input } = JSON.parse(body);
       assert.equal(agent.ampersand.compaction, 'auto');
+      assert.equal(agent.ampersand.allow_silent_completion, false);
       assert(agent.tools.some((tool: { name: string }) => tool.name === 'post_message'));
       assert(!agent.tools.some((tool: { name: string }) => ['send_message', 'post_chat_message'].includes(tool.name)));
       assert.equal(input.length, 1);
+      assert.equal(input[0].metadata.source, 'system');
       assert.equal(agent.multi_agent, undefined);
       creates++;
       instructions.push(agent.instructions);
-      inputs.push(input[0]);
       return send(200, state());
     }
     if (request.method !== 'POST' || route !== `/agents/sessions/${sessionId}/events`) return send(404);
@@ -142,10 +145,12 @@ async function mockAmpersand() {
 
 test('agent wakes on chat, reads payment logs, and posts status updates', async context => {
   const mock = await mockAmpersand();
-  const app = buildApp({ simulate: false, ampersand: { apiKey: 'test-key', baseUrl: mock.url } });
+  const restoreFetch = routeAmpersandTo(mock.url);
+  const app = buildApp({ simulate: false, ampersandApiKey: 'test-key' });
   context.after(async () => {
     await app.close();
     mock.close();
+    restoreFetch();
   });
   const post = (url: string, payload: object = {}, token?: string) => app.inject({
     method: 'POST', url, payload, headers: token ? { authorization: `Bearer ${token}` } : undefined,
@@ -154,7 +159,11 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
   let nonce = 0;
   const chat = (text: string, channel = 'incident-response') =>
     post(`/api/chat/channels/${channel}/messages`, { text, nonce: (++nonce).toString(16).padStart(32, '0') }, token);
-  const flags = async () => (await post('/api/tools/get_flags')).json();
+  const toolOutput = async (name: string, args: object = {}) => {
+    const receipt = await mock.call(name, args);
+    assert.equal(receipt.success, true);
+    return JSON.parse(receipt.output!);
+  };
   let flow = 0;
   const payment = async (user: number, expectedStatus: number, cartCurrency: string, paymentCurrency?: string) => {
     const flowId = `checkout-${++flow}`;
@@ -181,16 +190,17 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
     return response.json<AmpersandTranscript>();
   };
   const empty = await transcript();
-  assert.equal(empty.sessionId, null);
-  assert.equal(empty.usage, null);
+  assert.equal(empty.sessionId, 'sess_1');
   assert.deepEqual(empty.items, []);
-  assert.match((await app.inject('/ampersand')).body, /System instructions/);
+  assert.match((await app.inject('/ampersand')).body, /id="root"/);
+  assert.equal((await app.inject('/api/tools')).statusCode, 404);
+  assert.equal((await post('/api/tools/get_flags')).statusCode, 404);
 
   await setStrict(true);
   assert.equal((await chat('Hello', 'all-water-cooler')).statusCode, 201);
   await mock.ready();
   assert.equal(mock.creates(), 1);
-  assert.equal(mock.inputs[0].content[0].text, 'Hello');
+  await until(() => mock.inputs.find(input => input.content[0].text === 'Hello'));
   assert.equal((await chat('Retry this message', 'all-water-cooler')).statusCode, 201);
   await until(() => mock.inputs.find(input => input.content[0].text === 'Retry this message'));
   await chat('Follow-up after retry');
@@ -205,7 +215,7 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
   assert.equal((await mock.call('list_channels', {}, 'other-turn-work', true)).success, true);
   assert.equal(mock.inputs.filter(input => input.content[0].text === 'Retry this message').length, 1);
 
-  const failedFlow = await payment(1, 502, 'usd', 'usd');
+  await payment(4, 502, 'usd', 'usd');
   await payment(2, 502, 'eur', 'eur');
   await payment(1, 201, 'usd');
   await payment(3, 201, 'USD', 'usd');
@@ -224,7 +234,8 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
   assert.equal(debug.items[1].name, 'query_logs');
   const older = `?after=${debug.nextCursor}&sessionId=${debug.sessionId}`;
   assert.equal((await transcript(older)).items[0].content?.[0].text, 'Hello');
-  const failedTrace = await mock.call('query_logs', { flowId: failedFlow });
+  assert.equal((await mock.call('query_logs', { flowId: 'checkout-1' })).success, false);
+  const failedTrace = await mock.call('query_logs', { userId: 'shopper-4' });
   assert.equal(failedTrace.success, true);
   const [payLog, cartLog] = JSON.parse(failedTrace.output!).entries;
   assert.equal(payLog.error.code, 'PAYMENT_PROVIDER_REJECTED');
@@ -238,14 +249,14 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
 
   const update = { flag: 'strict_payment_validation', enabled: false };
   assert.equal((await mock.call('update_flag', update)).success, true);
-  const history = (await post('/api/tools/get_flag_history', { flag: update.flag })).json().history;
+  const { history } = await toolOutput('get_flag_history', { flag: update.flag });
   assert.equal(history[0].source, 'agent');
   assert.equal(history[0].previousEnabled, true);
   assert.equal(history[0].enabled, false);
-  assert.equal((await flags()).flags.find((flag: { id: string }) => flag.id === update.flag).updatedAt, history[0].at);
+  assert.equal((await toolOutput('get_flags')).flags.find((flag: { id: string }) => flag.id === update.flag).updatedAt, history[0].at);
   const enable = { flag: 'cart_item_details', enabled: true };
   assert.equal((await mock.call('update_flag', enable)).success, true);
-  const enabledHistory = (await post('/api/tools/get_flag_history', { flag: enable.flag })).json().history;
+  const { history: enabledHistory } = await toolOutput('get_flag_history', { flag: enable.flag });
   assert.equal(enabledHistory[0].enabled, true);
   assert.equal(enabledHistory[0].source, 'agent');
   await payment(1, 201, 'usd', 'usd');
@@ -257,13 +268,11 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
     channel: 'global-incident-status', text: 'Checkout payments are succeeding again.',
   })).success, true);
 
-  const page = (await post('/api/tools/read_channel', { channel: 'global-incident-status', limit: 1 })).json();
+  const page = await toolOutput('read_channel', { channel: 'global-incident-status', limit: 1 });
   assert.equal(page.messages[0].author.name, 'Ampersand');
   assert.equal(page.messages[0].text, 'Checkout payments are succeeding again.');
   assert.equal(typeof page.nextBefore, 'number');
-  const earlier = (await post('/api/tools/read_channel', {
-    channel: 'global-incident-status', before: page.nextBefore, limit: 1,
-  })).json();
+  const earlier = await toolOutput('read_channel', { channel: 'global-incident-status', before: page.nextBefore, limit: 1 });
   assert.equal(earlier.messages[0].text, 'Checkout payments are failing for some shoppers.');
   assert.equal(earlier.nextBefore, null);
 

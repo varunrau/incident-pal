@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer, type ServerResponse } from 'node:http';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import Fastify from 'fastify';
+import { Ampersand, type AgentTools } from '../ampersand/agent.js';
 import { buildApp } from '../server.js';
 import type { ChatSession } from '../messenger/types.js';
+import { routeAmpersandTo } from './route-ampersand.js';
 
 async function until<T>(read: () => T | undefined) {
   const deadline = performance.now() + 4_000;
@@ -15,11 +18,13 @@ async function until<T>(read: () => T | undefined) {
   throw new Error('Timed out waiting for Ampersand transport');
 }
 
-// A minimal Ampersand that records each session it creates. `onCreate` decides how a create
-// request is answered after the session has been saved.
-async function mockAmpersand(onCreate: (count: number, response: ServerResponse, session: object) => void) {
-  const sessions: Array<{ id: string; status: string; metadata: Record<string, string> }> = [];
+type Event = { type: string; call_id?: string; success?: boolean; output?: string };
+
+// A minimal Ampersand that records the sessions it creates and the events it receives.
+async function mockAmpersand(context: TestContext, { createStatus = 200, requiredActions = [] as object[] } = {}) {
+  const sessions: Array<{ id: string; status: string; required_actions: object[] }> = [];
   const deleted: string[] = [];
+  const events: Event[] = [];
   const streams = new Set<ServerResponse>();
   const server = createServer(async (request, response) => {
     const send = (code: number, body?: object) => {
@@ -32,7 +37,6 @@ async function mockAmpersand(onCreate: (count: number, response: ServerResponse,
       deleted.push(id);
       return send(200, { deleted: true });
     }
-    if (request.method === 'GET' && url.pathname === '/agents/sessions') return send(200, { data: sessions });
     if (request.method === 'GET' && url.pathname.endsWith('/events')) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       response.flushHeaders();
@@ -46,60 +50,87 @@ async function mockAmpersand(onCreate: (count: number, response: ServerResponse,
     let body = '';
     for await (const chunk of request) body += chunk;
     if (request.method === 'POST' && url.pathname === '/agents/sessions') {
-      const created = { id: `sess_${sessions.length + 1}`, status: 'idle', metadata: JSON.parse(body).metadata };
+      if (createStatus !== 200) return send(createStatus, { error: { message: 'rejected' } });
+      if (!JSON.parse(body).input?.length) return send(400, { error: { message: 'Invalid request fields: input' } });
+      const created = { id: `sess_${sessions.length + 1}`, status: 'idle', required_actions: requiredActions };
       sessions.push(created);
-      return onCreate(sessions.length, response, created);
+      return send(200, created);
     }
-    send(request.method === 'POST' && session ? 202 : 404);
+    if (request.method === 'POST' && session) {
+      events.push(...JSON.parse(body).events);
+      return send(202);
+    }
+    send(404);
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   assert(address && typeof address !== 'string');
-  return {
-    url: `http://127.0.0.1:${address.port}`, sessions, deleted, streams,
-    close() {
-      for (const stream of streams) stream.end();
-      server.close();
-      server.closeAllConnections();
-    },
-  };
+  const restoreFetch = routeAmpersandTo(`http://127.0.0.1:${address.port}`);
+  context.after(() => {
+    restoreFetch();
+    for (const stream of streams) stream.end();
+    server.close();
+    server.closeAllConnections();
+  });
+  return { sessions, deleted, events, streams };
 }
 
-async function startChat(url: string) {
-  const app = buildApp({ simulate: false, ampersand: { apiKey: 'test-key', baseUrl: url } });
+test('the session is created at startup and receives chat as input events', async context => {
+  const mock = await mockAmpersand(context);
+  const app = buildApp({ simulate: false, ampersandApiKey: 'test-key' });
+  context.after(() => app.close());
+
+  await app.ready();
+  assert.equal(mock.sessions.length, 1);
+  await until(() => mock.streams.size || undefined);
+
   const { token } = (await app.inject({ method: 'POST', url: '/api/chat/participants', payload: { name: 'Responder' } })).json<ChatSession>();
   const response = await app.inject({
     method: 'POST', url: '/api/chat/channels/incident-response/messages',
     payload: { text: 'Checkout is failing', nonce: '0'.repeat(32) }, headers: { authorization: `Bearer ${token}` },
   });
   assert.equal(response.statusCode, 201);
-  return app;
-}
-
-test('a create whose response is lost is recovered instead of repeated', async context => {
-  // The first create succeeds on the server but the client sees a 503.
-  const mock = await mockAmpersand((count, response, session) => {
-    response.writeHead(count === 1 ? 503 : 200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify(session));
-  });
-  const app = await startChat(mock.url);
-  context.after(async () => {
-    await app.close();
-    mock.close();
-  });
-
-  await until(() => mock.streams.size || undefined);
+  await until(() => mock.events.length || undefined);
+  assert.equal(mock.events[0].type, 'agent.session.input.message');
   assert.equal(mock.sessions.length, 1);
-  assert.equal((await app.inject('/api/ampersand/transcript')).json().sessionId, 'sess_1');
 });
 
-test('closing during a create deletes the session it may have made', async context => {
-  // Never answer the create, as if the response is still on its way at shutdown.
-  const mock = await mockAmpersand(() => {});
-  context.after(() => mock.close());
-  const app = await startChat(mock.url);
+test('the server does not start when the session cannot be created', async context => {
+  await mockAmpersand(context, { createStatus: 401 });
+  const app = buildApp({ simulate: false, ampersandApiKey: 'test-key' });
+  context.after(() => app.close());
+  await assert.rejects(async () => { await app.ready(); });
+});
 
-  await until(() => mock.sessions.length || undefined);
+test('closing the server deletes its session', async context => {
+  const mock = await mockAmpersand(context);
+  const app = buildApp({ simulate: false, ampersandApiKey: 'test-key' });
+  await app.ready();
   await app.close();
   assert.deepEqual(mock.deleted, ['sess_1']);
+});
+
+test('tool calls in the same turn run in parallel', async context => {
+  const action = (name: string) => ({ type: 'function_call', turn_id: 'turn-1', call_id: name, name, arguments: {} });
+  const mock = await mockAmpersand(context, { requiredActions: [action('first'), action('second')] });
+
+  let secondStarted!: () => void;
+  const started = new Promise<void>(resolve => { secondStarted = resolve; });
+  const parameters = { type: 'object', properties: {} };
+  const tools: AgentTools = {
+    definitions: ['first', 'second'].map(name => ({ type: 'function', name, description: name, parameters })),
+    // `first` finishes only after `second` has begun, so running them in order never finishes.
+    async execute(name) {
+      if (name === 'first') await started;
+      else secondStarted();
+      return { name };
+    },
+  };
+  const agent = new Ampersand('test-key', tools, Fastify().log);
+  context.after(() => agent.close());
+  await agent.start();
+
+  await until(() => mock.events.length === 2 || undefined);
+  assert.deepEqual(mock.events.map(event => event.call_id).sort(), ['first', 'second']);
+  assert(mock.events.every(event => event.success));
 });

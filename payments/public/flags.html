@@ -17,34 +17,6 @@
   <script type="module" src="/flags.js"></script>
 </head>
 <body>
-  <header class="masthead">
-    <div class="masthead-inner">
-      <div class="brand">
-        <img src="/pal.svg" width="26" height="26" alt="">
-        <strong>Incident Pal</strong>
-      </div>
-      <nav class="app-nav" aria-label="Main">
-        <a href="/">Dashboard</a>
-        <a href="/flags" aria-current="page">Feature flags</a>
-        <a href="/chat">Chat</a>
-        <a href="/ampersand">Ampersand</a>
-      </nav>
-    </div>
-  </header>
-  <main class="flags-page" aria-labelledby="flags-heading">
-    <h1 id="flags-heading">Feature flags</h1>
-    <p id="connection-label" class="connection" role="status" hidden></p>
-    <div class="flags-layout">
-      <section class="flag-controls" aria-labelledby="flag-controls-heading">
-        <h2 id="flag-controls-heading">Controls</h2>
-        <div id="flag-list"><p>Connecting…</p></div>
-        <p id="flag-feedback" class="flag-feedback error-text" role="status" hidden></p>
-      </section>
-      <section class="flag-history" aria-labelledby="flag-history-heading">
-        <h2 id="flag-history-heading">Flag history</h2>
-        <ol id="flag-history"><li>Loading history…</li></ol>
-      </section>
-    </div>
-  </main>
+  <div id="root"></div>
 </body>
 </html>

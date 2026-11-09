@@ -22,9 +22,6 @@ export interface ChatSnapshot {
   messages: ChatMessage[];
 }
 
-export const responseChannel = 'incident-response';
-export const statusChannel = 'global-incident-status';
-
 export interface ChatSession {
   author: ChatAuthor;
   token: string;
