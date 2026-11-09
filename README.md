@@ -2,6 +2,17 @@
 
 A local TypeScript and Fastify demo for [Incident collaborator](https://app.notion.com/p/4113f4780ef48027b672ea7e37a6d41d). The UI follows the compact [dashboard](https://app.paper.design/file/01M6VHFGCTHKNCWPS5MDAE31JH/p-3-0) and [chat](https://app.paper.design/file/01M6VHFGCTHKNCWPS5MDAE31JH/p-2-0) Paper layouts.
 
+## Repository layout
+
+| Directory | Component | Contents |
+| --- | --- | --- |
+| `payments/` | Payments app | Shop routes, request logs and feature flags (`telemetry.ts`), the dashboard and flags pages |
+| `messenger/` | Slack-like messenger | Channels, participants, the SSE event stream, the chat page and avatars |
+| `ampersand/` | Ampersand agent | Session lifecycle (`agent.ts`), system prompt, agent tools, and the transcript page |
+| `shared/` | Shared | Demo shopper fixtures, browser UI helpers, styles, fonts and icons |
+
+`server.ts` creates the single Fastify app that connects the three components.
+
 ## Run locally
 
 Use Node.js 22 or newer. Set `AMPERSAND_API_KEY` in `.env` or the shell before starting the server.
@@ -58,7 +69,7 @@ One Ampersand session receives new human messages across all channels. The agent
 | --- | --- |
 | `list_channels` | `{}` |
 | `read_channel` | `{"channel":"incident-response","limit":10}` |
-| `query_logs` | `{"level":"error","step":"Pay","limit":10}` |
+| `query_logs` | `{"level":"error","route":"/shop/checkout","limit":10}` |
 | `tail_logs` | `{"level":"error"}`, then `{"level":"error","after":42}` using the returned cursor |
 | `get_flags` | `{}` |
 | `get_flag_history` | `{"flag":"strict_payment_validation"}` |

@@ -3,7 +3,8 @@ import { createServer, type ServerResponse } from 'node:http';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { buildApp } from '../server.js';
-import type { AmpersandTranscript, ChatSession } from '../types.js';
+import type { AmpersandTranscript } from '../ampersand/types.js';
+import type { ChatSession } from '../messenger/types.js';
 
 type Input = { content: { text: string }[]; metadata: { id: string; channel: string; source: string } };
 type Receipt = { success: boolean; output?: string; error?: string };
@@ -212,7 +213,7 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
   await chat('Please investigate the checkout failures.');
   await until(() => mock.inputs.find(input => input.content[0].text === 'Please investigate the checkout failures.'));
   assert(mock.inputs.every(input => input.metadata.source === 'chat'));
-  const paymentLogs = await mock.call('query_logs', { step: 'Pay', level: 'error' });
+  const paymentLogs = await mock.call('query_logs', { route: '/shop/checkout', level: 'error' });
   assert.equal(paymentLogs.success, true);
   assert.equal(JSON.parse(paymentLogs.output!).entries.length, 2);
   const debug = await transcript();
@@ -252,7 +253,7 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
   assert.equal(enabledHistory[0].source, 'agent');
   await payment(1, 201, 'usd', 'usd');
   await payment(2, 201, 'eur', 'eur');
-  const successfulPayments = await mock.call('query_logs', { step: 'Pay', level: 'info' });
+  const successfulPayments = await mock.call('query_logs', { route: '/shop/checkout', level: 'info' });
   assert.equal(successfulPayments.success, true);
   assert.equal(JSON.parse(successfulPayments.output!).entries.length, 4);
   assert.equal((await mock.call('post_message', {

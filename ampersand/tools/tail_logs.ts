@@ -1,5 +1,5 @@
-import type { createTelemetry } from '../telemetry.js';
-import type { TailLogs } from '../types.js';
+import type { createTelemetry } from '../../payments/telemetry.js';
+import type { TailLogs } from '../../payments/types.js';
 import type { Tool } from './index.js';
 import { counter, logFilters, object } from './schemas.js';
 

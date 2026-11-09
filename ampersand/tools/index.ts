@@ -1,7 +1,7 @@
 import { Ajv } from 'ajv';
 import type { FastifyInstance } from 'fastify';
-import type { createChat } from '../chat.js';
-import type { createTelemetry } from '../telemetry.js';
+import type { createChat } from '../../messenger/chat.js';
+import type { createTelemetry } from '../../payments/telemetry.js';
 import { getFlagHistory } from './get_flag_history.js';
 import { getFlags } from './get_flags.js';
 import { listChannels } from './list_channels.js';

@@ -9,5 +9,5 @@
     "strict": true,
     "noEmitOnError": true
   },
-  "include": ["*.ts", "client/**/*.ts", "test/**/*.ts", "tools/**/*.ts"]
+  "include": ["*.ts", "ampersand/**/*.ts", "payments/**/*.ts", "messenger/**/*.ts", "shared/**/*.ts", "test/**/*.ts"]
 }

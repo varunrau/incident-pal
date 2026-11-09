@@ -1,5 +1,5 @@
 import type { Dashboard, FlagLog, Health, RequestLog } from '../types.js';
-import { $, escape, flagState, request, setText, time } from './ui.js';
+import { $, escape, flagState, request, setText, time } from '../../shared/client/ui.js';
 
 const number = new Intl.NumberFormat();
 
@@ -87,12 +87,12 @@ function renderLogs() {
     const failed = log.level === 'error';
     return `<tr>
       <td>${time(log.at)}</td><td>${escape(log.userId)}</td>
-      <td><button type="button" data-request="${log.sequence}" aria-expanded="${expanded}">${escape(log.method)} ${escape(log.path)}</button></td>
+      <td><button type="button" data-request="${log.sequence}" aria-expanded="${expanded}">${escape(log.method)} ${escape(log.route)}</button></td>
       <td class="${failed ? 'error-text' : 'success-text'}">${log.status}</td>
       <td>${log.durationMs} ms</td>
     </tr>${expanded ? `<tr class="log-detail"><td colspan="5"><div class="detail-content">
       <strong class="${failed ? 'error-text' : 'success-text'}">${escape(log.error?.code ?? 'Request succeeded')}</strong>
-      <p>${escape(log.error?.message ?? `${log.step} completed with HTTP ${log.status}.`)}</p>
+      <p>${escape(log.error?.message ?? `${log.method} ${log.route} completed with HTTP ${log.status}.`)}</p>
       <small>Request ${escape(log.requestId)} · Flow ${escape(log.flowId)} · ${log.durationMs} ms</small>
       ${log.checkout ? `<small>Cart ${escape(log.checkout.cartId)} · Currency ${escape(log.checkout.currency)}</small>` : ''}
     </div></td></tr>` : ''}`;

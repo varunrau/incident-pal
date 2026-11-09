@@ -1,5 +1,5 @@
-import type { createTelemetry } from '../telemetry.js';
-import { flagDefinitions } from '../types.js';
+import type { createTelemetry } from '../../payments/telemetry.js';
+import { flagDefinitions } from '../../payments/types.js';
 import type { Tool } from './index.js';
 import { object } from './schemas.js';
 

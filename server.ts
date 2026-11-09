@@ -2,13 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 import Fastify, { LogController } from 'fastify';
-import { createAmpersand, type AmpersandConfig } from './ampersand.js';
-import { createChat } from './chat.js';
-import { checkoutRoutes, startShoppers } from './checkout.js';
-import { createTelemetry } from './telemetry.js';
-import { createAgentTools } from './tools/index.js';
-import { level, object, setFlagBody } from './tools/schemas.js';
-import type { Level, SetFlag } from './types.js';
+import { createAmpersand, type AmpersandConfig } from './ampersand/agent.js';
+import { createChat } from './messenger/chat.js';
+import { checkoutRoutes, startShoppers } from './payments/checkout.js';
+import { createTelemetry } from './payments/telemetry.js';
+import { createAgentTools } from './ampersand/tools/index.js';
+import { level, object, setFlagBody } from './ampersand/tools/schemas.js';
+import type { Level, SetFlag } from './payments/types.js';
 
 export function buildApp({
   simulate = true, logger = false, ampersand,
@@ -48,20 +48,20 @@ export function buildApp({
   });
   app.register(async web => {
     const files = [
-      ['/', '../public/index.html', 'text/html'],
-      ['/flags', '../public/flags.html', 'text/html'],
-      ['/chat', '../public/chat.html', 'text/html'],
-      ['/ampersand', '../public/ampersand.html', 'text/html'],
-      ['/ampersand.js', './client/ampersand.js', 'text/javascript'],
-      ['/chat.js', './client/chat.js', 'text/javascript'],
+      ['/', '../payments/public/index.html', 'text/html'],
+      ['/flags', '../payments/public/flags.html', 'text/html'],
+      ['/app.js', './payments/client/app.js', 'text/javascript'],
+      ['/flags.js', './payments/client/flags.js', 'text/javascript'],
+      ['/chat', '../messenger/public/chat.html', 'text/html'],
+      ['/chat.js', './messenger/client/chat.js', 'text/javascript'],
       ['/markdown-it.js', import.meta.resolve('markdown-it/browser'), 'text/javascript'],
-      ['/app.js', './client/app.js', 'text/javascript'],
-      ['/flags.js', './client/flags.js', 'text/javascript'],
-      ['/ui.js', './client/ui.js', 'text/javascript'],
-      ['/style.css', '../public/style.css', 'text/css'],
-      ['/pal.svg', '../public/pal.svg', 'image/svg+xml'],
-      ['/og.png', '../public/og.png', 'image/png'],
-      ['/fonts/ibm-plex-sans.woff2', '../public/fonts/ibm-plex-sans.woff2', 'font/woff2'],
+      ['/ampersand', '../ampersand/public/ampersand.html', 'text/html'],
+      ['/ampersand.js', './ampersand/client/ampersand.js', 'text/javascript'],
+      ['/shared/client/ui.js', './shared/client/ui.js', 'text/javascript'],
+      ['/style.css', '../shared/public/style.css', 'text/css'],
+      ['/pal.svg', '../shared/public/pal.svg', 'image/svg+xml'],
+      ['/og.png', '../shared/public/og.png', 'image/png'],
+      ['/fonts/ibm-plex-sans.woff2', '../shared/public/fonts/ibm-plex-sans.woff2', 'font/woff2'],
     ];
     await Promise.all(files.map(async ([route, file, type]) => {
       const body = await readFile(new URL(file, import.meta.url));

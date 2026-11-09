@@ -8,13 +8,13 @@ const BUCKET_MS = 5_000;
 const BUCKET_COUNT = 24;
 const LOG_LIMIT = 10_000;
 
-function matches(log: RequestLog, { level, userId, requestId, flowId, flagSnapshotId, step }: LogFilters) {
+function matches(log: RequestLog, { level, userId, requestId, flowId, flagSnapshotId, route }: LogFilters) {
   return (!level || log.level === level)
     && (!userId || log.userId === userId)
     && (!requestId || log.requestId === requestId)
     && (!flowId || log.flowId === flowId)
     && (flagSnapshotId === undefined || log.flags.id === flagSnapshotId)
-    && (!step || log.step === step);
+    && (!route || log.route === route);
 }
 
 export function createTelemetry() {

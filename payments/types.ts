@@ -1,4 +1,5 @@
-export type Step = 'Browse' | 'Cart' | 'Pay';
+export const routes = ['/shop/products', '/shop/cart', '/shop/checkout'] as const;
+export type Route = (typeof routes)[number];
 export type Level = 'info' | 'error';
 export const flagDefinitions = [
   { id: 'order_receipts', label: 'Order receipts', description: 'Include a receipt ID in checkout responses.' },
@@ -43,8 +44,7 @@ export interface RequestLog {
   userId: string | null;
   flowId: string | null;
   method: string;
-  path: string;
-  step: Step;
+  route: Route;
   status: number;
   durationMs: number;
   flags: FlagSnapshot;
@@ -58,7 +58,7 @@ export interface LogFilters {
   requestId?: string;
   flowId?: string;
   flagSnapshotId?: number;
-  step?: Step;
+  route?: Route;
   limit?: number;
 }
 
@@ -80,55 +80,4 @@ export interface Dashboard {
   health: Health;
   flags: FlagLog;
   logs: RequestLog[];
-}
-
-export interface ChatChannel {
-  id: string;
-  topic: string;
-}
-
-export interface ChatAuthor {
-  id: string;
-  name: string;
-  avatar?: string;
-}
-
-export interface ChatMessage {
-  id: number;
-  channel: string;
-  author: ChatAuthor;
-  text: string;
-  at: number;
-}
-
-export interface ChatSnapshot {
-  channels: ChatChannel[];
-  messages: ChatMessage[];
-}
-
-export interface AmpersandTranscript {
-  sessionId: string | null;
-  instructions: string;
-  model: string;
-  usage: { inputTokens: number; outputTokens: number; estimatedCostUsd: number | null } | null;
-  items: AmpersandTranscriptItem[];
-  nextCursor: string | null;
-}
-
-export interface AmpersandTranscriptItem {
-  type?: string;
-  role?: 'user' | 'assistant';
-  content?: { text?: string; type?: string }[];
-  metadata?: { channel?: string; sender_name?: string } | null;
-  name?: string;
-  call_id?: string;
-  status?: string;
-}
-
-export const responseChannel = 'incident-response';
-export const statusChannel = 'global-incident-status';
-
-export interface ChatSession {
-  author: ChatAuthor;
-  token: string;
 }

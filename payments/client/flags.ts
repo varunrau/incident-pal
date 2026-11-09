@@ -1,5 +1,5 @@
 import type { FlagId, FlagLog, FlagSnapshot } from '../types.js';
-import { $, escape, flagState, request, setText, time } from './ui.js';
+import { $, escape, flagState, request, setText, time } from '../../shared/client/ui.js';
 
 let currentFlags: FlagLog | undefined;
 let flagPending = false;

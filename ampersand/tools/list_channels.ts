@@ -1,4 +1,4 @@
-import type { createChat } from '../chat.js';
+import type { createChat } from '../../messenger/chat.js';
 import type { Tool } from './index.js';
 import { object } from './schemas.js';
 

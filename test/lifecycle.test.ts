@@ -3,7 +3,7 @@ import { createServer, type ServerResponse } from 'node:http';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { buildApp } from '../server.js';
-import type { ChatSession } from '../types.js';
+import type { ChatSession } from '../messenger/types.js';
 
 async function until<T>(read: () => T | undefined) {
   const deadline = performance.now() + 4_000;

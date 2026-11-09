@@ -1,19 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger, FastifyError, FastifyPluginAsync } from 'fastify';
-import { shoppers } from './demo-shoppers.js';
+import { shoppers } from '../shared/demo-shoppers.js';
 import type { createTelemetry } from './telemetry.js';
-import type { FlagSnapshot, RequestError, RequestLog, Step } from './types.js';
+import { routes, type FlagSnapshot, type Route, type RequestError, type RequestLog } from './types.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
     flagSnapshot: FlagSnapshot | null;
     checkoutError: RequestError | null;
     checkoutDetails: RequestLog['checkout'] | null;
-  }
-
-  interface FastifyContextConfig {
-    step?: Step;
   }
 }
 
@@ -45,16 +41,15 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
     reply.code(status).send(details);
   });
   app.addHook('onResponse', async (request, reply) => {
-    const { step } = request.routeOptions.config;
+    const route = request.routeOptions.url;
     const { flagSnapshot } = request;
-    if (!step || !flagSnapshot) return;
+    if (!routes.includes(route as Route) || !flagSnapshot) return;
     telemetry.record({
       requestId: request.id,
       userId: request.headers['x-sim-user']?.toString() ?? null,
       flowId: request.headers['x-sim-flow']?.toString() ?? null,
       method: request.method,
-      path: request.routeOptions.url ?? request.url,
-      step,
+      route: route as Route,
       status: reply.statusCode,
       durationMs: Math.round(reply.elapsedTime),
       flags: flagSnapshot,
@@ -63,10 +58,9 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
     });
   });
 
-  app.get('/products', { config: { step: 'Browse' } }, async () => [product]);
+  app.get('/products', async () => [product]);
 
   app.post<{ Body: { productId: string; currency?: string } }>('/cart', {
-    config: { step: 'Cart' },
     schema: {
       body: {
         type: 'object',
@@ -94,7 +88,6 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
   });
 
   app.post<{ Body: { cartId: string; currency?: string } }>('/checkout', {
-    config: { step: 'Pay' },
     schema: {
       body: {
         type: 'object',

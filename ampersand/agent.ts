@@ -112,7 +112,7 @@ export function createAmpersand(config: AmpersandConfig, tools: AgentTools, log:
   const model = config.model ?? 'ampersand-v0.1';
   const { definitions } = tools;
   const toolNames = new Set(definitions.map(tool => tool.name));
-  const instructions = readFileSync(new URL('../prompts/ampersand.md', import.meta.url), 'utf8').trimEnd();
+  const instructions = readFileSync(new URL('../../ampersand/prompts/ampersand.md', import.meta.url), 'utf8').trimEnd();
   const lifetime = new AbortController();
   const queue: AgentInput[] = [];
   let state: Lifecycle = { kind: 'idle' };

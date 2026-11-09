@@ -2,7 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { ServerResponse } from 'node:http';
 import type { FastifyPluginAsync } from 'fastify';
-import { shoppers } from './demo-shoppers.js';
+import { shoppers } from '../shared/demo-shoppers.js';
 import { responseChannel, statusChannel, type ChatAuthor, type ChatChannel, type ChatMessage, type ChatSession, type ChatSnapshot } from './types.js';
 
 type SeedMessage = [supportAuthor: string | null, text: string];
@@ -140,7 +140,7 @@ export function createChat() {
     onMessage: (message: ChatMessage) => void;
   }> = async (app, { onMessage }) => {
     await Promise.all([...rosterAvatars.values(), ...joinAvatars].map(async avatar => {
-      const image = await readFile(new URL(`../public/avatars/${avatar}.webp`, import.meta.url));
+      const image = await readFile(new URL(`../../messenger/public/avatars/${avatar}.webp`, import.meta.url));
       app.get(`/avatars/${avatar}.webp`, async (request, reply) =>
         reply.type('image/webp').header('Cache-Control', 'public, max-age=3600').send(image));
     }));

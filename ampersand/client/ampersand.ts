@@ -1,5 +1,5 @@
 import type { AmpersandTranscript, AmpersandTranscriptItem } from '../types.js';
-import { $, request, setText } from './ui.js';
+import { $, request, setText } from '../../shared/client/ui.js';
 
 const refresh = $<HTMLButtonElement>('transcript-refresh');
 const older = $<HTMLButtonElement>('transcript-older');

@@ -1,4 +1,4 @@
-import { flagDefinitions } from '../types.js';
+import { flagDefinitions, routes } from '../../payments/types.js';
 
 export const object = (properties: Record<string, object> = {}, required: string[] = []) =>
   ({ type: 'object', properties, required, additionalProperties: false });
@@ -20,6 +20,6 @@ export const logFilters = {
   requestId: { type: 'string', maxLength: 64 },
   flowId: { type: 'string', maxLength: 64 },
   flagSnapshotId: counter,
-  step: { type: 'string', enum: ['Browse', 'Cart', 'Pay'] },
+  route: { type: 'string', enum: routes },
   limit: { type: 'integer', minimum: 1, maximum: 200 },
 };
