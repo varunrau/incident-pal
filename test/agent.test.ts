@@ -170,8 +170,7 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
     return flowId;
   };
   const setStrict = async (enabled: boolean) => {
-    const { snapshotId } = await flags();
-    assert.equal((await post('/api/flags', { flag: 'strict_payment_validation', enabled, expectedSnapshotId: snapshotId })).statusCode, 200);
+    assert.equal((await post('/api/flags', { flag: 'strict_payment_validation', enabled })).statusCode, 200);
   };
 
   const transcriptUrl = '/api/ampersand/transcript';
@@ -237,16 +236,14 @@ test('agent wakes on chat, reads payment logs, and posts status updates', async 
   await mock.call('post_message', impact, 'lost-public-receipt');
   await until(() => mock.actions.has('lost-public-receipt') ? undefined : true);
 
-  const { snapshotId } = await flags();
-  const update = { flag: 'strict_payment_validation', enabled: false, expectedSnapshotId: snapshotId };
-  assert.equal((await mock.call('update_flag', { ...update, expectedSnapshotId: 0 })).success, false);
+  const update = { flag: 'strict_payment_validation', enabled: false };
   assert.equal((await mock.call('update_flag', update)).success, true);
   const history = (await post('/api/tools/get_flag_history', { flag: update.flag })).json().history;
   assert.equal(history[0].source, 'agent');
   assert.equal(history[0].previousEnabled, true);
   assert.equal(history[0].enabled, false);
   assert.equal((await flags()).flags.find((flag: { id: string }) => flag.id === update.flag).updatedAt, history[0].at);
-  const enable = { flag: 'cart_item_details', enabled: true, expectedSnapshotId: (await flags()).snapshotId };
+  const enable = { flag: 'cart_item_details', enabled: true };
   assert.equal((await mock.call('update_flag', enable)).success, true);
   const enabledHistory = (await post('/api/tools/get_flag_history', { flag: enable.flag })).json().history;
   assert.equal(enabledHistory[0].enabled, true);

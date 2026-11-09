@@ -10,16 +10,14 @@ export const flagField = { type: 'string', enum: flagDefinitions.map(flag => fla
 
 export const setFlagBody = object({
   flag: flagField,
-  expectedSnapshotId: counter,
   enabled: { type: 'boolean' },
-}, ['flag', 'expectedSnapshotId', 'enabled']);
+}, ['flag', 'enabled']);
 
 export const logFilters = {
   level,
   userId: { type: 'string', maxLength: 64 },
   requestId: { type: 'string', maxLength: 64 },
   flowId: { type: 'string', maxLength: 64 },
-  flagSnapshotId: counter,
   route: { type: 'string', enum: routes },
   limit: { type: 'integer', minimum: 1, maximum: 200 },
 };

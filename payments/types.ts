@@ -11,13 +11,9 @@ type FlagDefinition = (typeof flagDefinitions)[number];
 export type FlagId = FlagDefinition['id'];
 export type FlagSource = 'human' | 'agent';
 
-export interface FlagSnapshot {
-  id: number;
-  values: Readonly<Record<FlagId, boolean>>;
-}
+export type FlagValues = Readonly<Record<FlagId, boolean>>;
 
 export interface FlagChange {
-  id: number;
   flag: FlagId;
   enabled: boolean;
   previousEnabled: boolean;
@@ -26,7 +22,7 @@ export interface FlagChange {
 }
 
 export interface FlagLog {
-  current: FlagSnapshot;
+  current: FlagValues;
   definitions: readonly FlagDefinition[];
   history: FlagChange[];
 }
@@ -47,7 +43,6 @@ export interface RequestLog {
   route: Route;
   status: number;
   durationMs: number;
-  flags: FlagSnapshot;
   error: RequestError | null;
   checkout?: { cartId: string; currency: string };
 }
@@ -57,15 +52,13 @@ export interface LogFilters {
   userId?: string;
   requestId?: string;
   flowId?: string;
-  flagSnapshotId?: number;
   route?: Route;
   limit?: number;
 }
 
 export type QueryLogs = LogFilters & { before?: number };
 export type TailLogs = LogFilters & { after?: number };
-export type FlagTarget = { flag: FlagId; expectedSnapshotId: number };
-export type SetFlag = FlagTarget & { enabled: boolean };
+export type SetFlag = { flag: FlagId; enabled: boolean };
 
 export interface Health {
   start: number;

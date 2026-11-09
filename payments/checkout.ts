@@ -3,11 +3,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger, FastifyError, FastifyPluginAsync } from 'fastify';
 import { shoppers } from '../shared/demo-shoppers.js';
 import type { createTelemetry } from './telemetry.js';
-import { routes, type FlagSnapshot, type Route, type RequestError, type RequestLog } from './types.js';
+import { routes, type Route, type RequestError, type RequestLog } from './types.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
-    flagSnapshot: FlagSnapshot | null;
     checkoutError: RequestError | null;
     checkoutDetails: RequestLog['checkout'] | null;
   }
@@ -21,13 +20,9 @@ function checkoutError(statusCode: number, code: string, message: string) {
 
 export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof createTelemetry> }> = async (app, { telemetry }) => {
   const carts = new Map<string, { expiresAt: number; currency: string }>();
-  app.decorateRequest('flagSnapshot', null);
   app.decorateRequest('checkoutError', null);
   app.decorateRequest('checkoutDetails', null);
 
-  app.addHook('onRequest', async request => {
-    request.flagSnapshot = telemetry.currentFlags();
-  });
   app.addHook('preHandler', async () => {
     await delay(35 + Math.random() * 85);
   });
@@ -42,8 +37,7 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
   });
   app.addHook('onResponse', async (request, reply) => {
     const route = request.routeOptions.url;
-    const { flagSnapshot } = request;
-    if (!routes.includes(route as Route) || !flagSnapshot) return;
+    if (!routes.includes(route as Route)) return;
     telemetry.record({
       requestId: request.id,
       userId: request.headers['x-sim-user']?.toString() ?? null,
@@ -52,7 +46,6 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
       route: route as Route,
       status: reply.statusCode,
       durationMs: Math.round(reply.elapsedTime),
-      flags: flagSnapshot,
       error: request.checkoutError,
       ...(request.checkoutDetails && { checkout: request.checkoutDetails }),
     });
@@ -83,7 +76,7 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
     return reply.code(201).send({
       cartId,
       totalCents: product.priceCents,
-      ...(request.flagSnapshot?.values.cart_item_details && { item: { ...product, quantity: 1 } }),
+      ...(telemetry.currentFlags().cart_item_details && { item: { ...product, quantity: 1 } }),
     });
   });
 
@@ -102,11 +95,10 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
       throw checkoutError(404, 'CART_NOT_FOUND', 'The cart expired or has already been checked out.');
     }
 
-    const { flagSnapshot } = request;
-    if (!flagSnapshot) throw new Error('Checkout route is missing its feature flags.');
+    const flags = telemetry.currentFlags();
     const paymentCurrency = currency?.toUpperCase() ?? cart.currency;
     request.checkoutDetails = { cartId, currency: paymentCurrency };
-    if (flagSnapshot.values.strict_payment_validation && paymentCurrency !== cart.currency) {
+    if (flags.strict_payment_validation && paymentCurrency !== cart.currency) {
       throw checkoutError(502, 'PAYMENT_PROVIDER_REJECTED', 'The payment provider rejected the request.');
     }
 
@@ -115,7 +107,7 @@ export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof c
     return reply.code(201).send({
       orderId,
       totalCents: product.priceCents,
-      ...(flagSnapshot.values.order_receipts && { receipt: `receipt-${orderId}` }),
+      ...(flags.order_receipts && { receipt: `receipt-${orderId}` }),
     });
   });
 };

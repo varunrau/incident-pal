@@ -81,7 +81,7 @@ export function buildApp({
   app.get('/api/flags', async () => telemetry.flagLog());
   app.post<{ Body: SetFlag }>('/api/flags', {
     schema: { body: setFlagBody },
-  }, async ({ body }) => telemetry.setFlag(body.flag, body.enabled, body.expectedSnapshotId, 'human'));
+  }, async ({ body }) => telemetry.setFlag(body.flag, body.enabled, 'human'));
   if (simulate) {
     let stop: ReturnType<typeof startShoppers> | undefined;
     app.addHook('onListen', async () => {

@@ -1,4 +1,4 @@
-import type { FlagId, FlagLog, FlagSnapshot } from '../types.js';
+import type { FlagId, FlagLog, FlagValues } from '../types.js';
 import { $, escape, flagState, request, setText, time } from '../../shared/client/ui.js';
 
 let currentFlags: FlagLog | undefined;
@@ -23,14 +23,14 @@ function renderFlags(flags: FlagLog) {
       </button>
     </div>`).join('');
   }
-  if (previous?.current.id !== flags.current.id || previous.history[0]?.at !== flags.history[0]?.at) {
+  if (previous?.history.length !== flags.history.length) {
     for (const button of $('flag-list').querySelectorAll('button')) {
-      const enabled = flags.current.values[button.dataset.flag as FlagId];
+      const enabled = flags.current[button.dataset.flag as FlagId];
       button.setAttribute('aria-checked', String(enabled));
     }
     $('flag-history').innerHTML = flags.history.length ? flags.history.map(event =>
       `<li><strong>${escape(flags.definitions.find(flag => flag.id === event.flag)?.label ?? event.flag)}</strong> · ${flagState(event.enabled)}
-        <span class="numeric">${time(event.at)} · ${escape(event.source)} · Snapshot #${event.id}</span></li>`).join('')
+        <span class="numeric">${time(event.at)} · ${escape(event.source)}</span></li>`).join('')
       : '<li>No flag changes yet.</li>';
   }
   syncFlagButtons();
@@ -63,13 +63,13 @@ function feedback(message: string) {
 async function toggleFlag(flag: FlagId) {
   if (flagPending || !connected || !currentFlags) return;
   const { current } = currentFlags;
-  const enabled = !current.values[flag];
+  const enabled = !current[flag];
   flagPending = true;
   syncFlagButtons();
   feedback('');
 
   try {
-    await request<FlagSnapshot>('/api/flags', { flag, enabled, expectedSnapshotId: current.id });
+    await request<FlagValues>('/api/flags', { flag, enabled });
   } catch (error) {
     feedback(error instanceof Error ? error.message : 'Flag change failed.');
   } finally {

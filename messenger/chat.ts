@@ -15,10 +15,10 @@ const customerHistory: Record<(typeof shoppers)[number]['id'], SeedMessage[]> = 
     ['Alex Kim', 'Glad it went through. You’ll get a separate email when it ships.'],
   ],
   'shopper-02': [
-    [null, 'My cart shows euros. Will the receipt use euros too?'],
-    ['Maya Chen', 'Yes, the receipt uses the currency shown when you check out.'],
-    [null, 'Thanks. I just checked out and the receipt shows the amount I expected.'],
-    ['Maya Chen', 'Great. You can use this channel if you need a copy later.'],
+    [null, 'Mon panier affiche des euros. Le reçu sera-t-il aussi en euros ?'],
+    ['Maya Chen', 'Oui, le reçu utilise la devise affichée au moment du paiement.'],
+    [null, 'Merci. Je viens de finaliser ma commande et le reçu indique bien le montant attendu.'],
+    ['Maya Chen', 'Parfait. N’hésitez pas à nous écrire sur ce canal si vous avez besoin d’une copie plus tard.'],
   ],
   'shopper-03': [
     [null, 'I left a notebook in my cart this morning and it was gone when I came back.'],

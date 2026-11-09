@@ -1,6 +1,6 @@
 import {
   flagDefinitions,
-  type FlagChange, type FlagId, type FlagLog, type FlagSnapshot, type FlagSource,
+  type FlagChange, type FlagId, type FlagLog, type FlagSource, type FlagValues,
   type Health, type LogFilters, type QueryLogs, type RequestLog, type TailLogs,
 } from './types.js';
 
@@ -8,22 +8,18 @@ const BUCKET_MS = 5_000;
 const BUCKET_COUNT = 24;
 const LOG_LIMIT = 10_000;
 
-function matches(log: RequestLog, { level, userId, requestId, flowId, flagSnapshotId, route }: LogFilters) {
+function matches(log: RequestLog, { level, userId, requestId, flowId, route }: LogFilters) {
   return (!level || log.level === level)
     && (!userId || log.userId === userId)
     && (!requestId || log.requestId === requestId)
     && (!flowId || log.flowId === flowId)
-    && (flagSnapshotId === undefined || log.flags.id === flagSnapshotId)
     && (!route || log.route === route);
 }
 
 export function createTelemetry() {
   let sequence = 0;
   const logs: RequestLog[] = [];
-  let flags: FlagSnapshot = {
-    id: 0,
-    values: { order_receipts: true, cart_item_details: false, strict_payment_validation: false },
-  };
+  let flags: FlagValues = { order_receipts: true, cart_item_details: false, strict_payment_validation: false };
   const flagHistory: FlagChange[] = [];
 
   function record(fields: Omit<RequestLog, 'sequence' | 'at' | 'level'>) {
@@ -83,15 +79,12 @@ export function createTelemetry() {
     };
   }
 
-  function setFlag(flag: FlagId, enabled: boolean, expectedSnapshotId: number, source: FlagSource) {
-    if (flags.id !== expectedSnapshotId) {
-      throw Object.assign(new Error('Feature flags changed. Refresh their state and try again.'), { statusCode: 409 });
-    }
-    if (flags.values[flag] === enabled) return flags;
+  function setFlag(flag: FlagId, enabled: boolean, source: FlagSource) {
+    if (flags[flag] === enabled) return flags;
 
-    const previousEnabled = flags.values[flag];
-    flags = { id: flags.id + 1, values: { ...flags.values, [flag]: enabled } };
-    const change: FlagChange = { id: flags.id, flag, enabled, previousEnabled, source, at: Date.now() };
+    const previousEnabled = flags[flag];
+    flags = { ...flags, [flag]: enabled };
+    const change: FlagChange = { flag, enabled, previousEnabled, source, at: Date.now() };
     flagHistory.push(change);
     return flags;
   }

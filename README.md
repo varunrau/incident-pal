@@ -35,7 +35,7 @@ Open [the dashboard](http://127.0.0.1:3000). Set `PORT` to change the port. Run 
 | Cart item details | Off | Adds the product and quantity to the cart response. |
 | Strict payment validation | Off | Checks the payment currency against the cart quote. |
 
-Flags apply to new requests immediately. Each request captures a snapshot for its handler and log entry. Flag state, change history, carts, and the most recent 10,000 request logs are held in memory and reset on restart. The server binds to loopback by default.
+Flags apply immediately, including to requests already in progress. Flag state, change history, carts, and the most recent 10,000 request logs are held in memory and reset on restart. The server binds to loopback by default.
 
 ## Multiplayer chat
 
@@ -74,6 +74,6 @@ One Ampersand session receives new human messages across all channels. The agent
 | `get_flags` | `{}` |
 | `get_flag_history` | `{"flag":"strict_payment_validation"}` |
 
-`read_channel` and `query_logs` return newest first. Pass `nextBefore` as `before` for older results. `tail_logs` returns oldest first within a batch. Poll with the returned cursor and the same filters. `missed` indicates that some entries aged out. Use `snapshotId` from `get_flags` as `expectedSnapshotId` for `update_flag`.
+`read_channel` and `query_logs` return newest first. Pass `nextBefore` as `before` for older results. `tail_logs` returns oldest first within a batch. Poll with the returned cursor and the same filters. `missed` indicates that some entries aged out.
 
 `update_flag`, `post_message`, and `pass` run inside the authenticated Ampersand session bridge.
