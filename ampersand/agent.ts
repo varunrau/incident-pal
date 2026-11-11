@@ -92,8 +92,9 @@ function toTranscriptItem(item: AgentSessionItem): AmpersandTranscriptItem {
 }
 
 // Drives this server's Ampersand session. The first input creates the session. Inputs run one turn
-// at a time, and inputs that arrive during a turn are sent together as the next one. The SDK runs
-// each turn, including executing tool calls and submitting their results.
+// at a time. Inputs that arrive during a turn join it at its next tool call, or are sent together
+// as the next turn if it makes none. The SDK runs each turn, including executing tool calls and
+// submitting their results.
 export class Ampersand {
   private readonly sessions: OpenAI['beta']['agents']['sessions'];
   private readonly instructions = readFileSync(new URL('../../ampersand/prompts/ampersand.md', import.meta.url), 'utf8').trimEnd();
@@ -102,6 +103,7 @@ export class Ampersand {
   private readonly queue: AgentInput[] = [];
   private sessionId?: string;
   private running = false;
+  // The inputs of the running turn, including any that joined it. Observers receive this array.
   private current: AgentInput[] = [];
 
   constructor(
@@ -219,6 +221,7 @@ export class Ampersand {
   // The SDK replaces a thrown error with a generic message, so failures are returned as output
   // the model can read.
   private async runTool(name: string, args: unknown) {
+    const joined = this.joinTurn();
     const inputs = this.current;
     for (const observer of this.observers) observer.toolStarted(inputs, name, args);
     try {
@@ -227,7 +230,30 @@ export class Ampersand {
       this.log.warn({ err: error, tool: name }, 'Ampersand tool failed');
       return { error: error instanceof Error ? error.message : 'Tool failed.' };
     } finally {
+      await joined;
       for (const observer of this.observers) observer.toolFinished(inputs, name, args);
+    }
+  }
+
+  // Sends inputs that arrived during this turn into it, so Ampersand reads them before it
+  // continues. This runs during a tool call, and the turn waits for that call's result, which is
+  // sent only after this finishes. So the turn cannot end before the inputs arrive. If sending
+  // fails, the inputs go back to the queue for the next turn.
+  private async joinTurn() {
+    const id = this.sessionId;
+    if (!id || !this.queue.length) return;
+    const inputs = this.queue.splice(0);
+    this.current.push(...inputs);
+    try {
+      await this.sessions.events.create(id, {
+        events: [{ type: 'agent.session.input.message', input: inputs.map(toMessage) }],
+        'Idempotency-Key': `join:${inputs[0].id}`,
+      }, { signal: this.lifetime.signal });
+    } catch (error) {
+      if (this.lifetime.signal.aborted) return;
+      this.log.warn({ err: error, inputIds: inputs.map(input => input.id) }, 'Ampersand could not add inputs to the running turn');
+      this.current.splice(this.current.length - inputs.length, inputs.length);
+      this.queue.unshift(...inputs);
     }
   }
 }

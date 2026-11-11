@@ -31,7 +31,7 @@ flowchart LR
 
 ### Ampersand
 
-`Ampersand` (`ampersand/agent.ts`) owns one remote session and feeds it inputs one turn at a time. Chat messages, approval decisions, and routine runs all arrive through `send()`. Inputs that arrive during a turn wait in the queue and are sent together as the next turn.
+`Ampersand` (`ampersand/agent.ts`) owns one remote session and feeds it inputs one turn at a time. Chat messages, approval decisions, and routine runs all arrive through `send()`. Inputs that arrive during a turn wait in the queue until Ampersand's next tool call, then join the running turn, so it can change course mid-investigation. The turn waits for that tool call's result, so it cannot end before they arrive. If the turn makes no more tool calls, the waiting inputs are sent together as the next turn.
 
 ```txt
 send(input)
@@ -44,9 +44,10 @@ send(input)
         no session → sessions.create(stream)   # sessionId read from the first event
         session    → sessions.stream(...)       # idempotency key: first input's ID
           SDK calls runTool(name, args) for each tool call
+            joinTurn()                     # queued inputs → events.create, added to current
             observers.toolStarted
             tools.execute → result, or { error } on throw
-            observers.toolFinished
+            await joinTurn, then observers.toolFinished   # the result is sent after this
       on failure → recover()               # keep the session if idle, otherwise delete it
       observers.turnEnded
 ```
