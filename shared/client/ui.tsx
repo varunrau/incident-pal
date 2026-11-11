@@ -43,9 +43,9 @@ export function usePolled<T>(path: string) {
 }
 
 const pages = [
+  { href: '/chat', label: 'Chat' },
   { href: '/', label: 'Dashboard' },
   { href: '/flags', label: 'Feature flags' },
-  { href: '/chat', label: 'Chat' },
   { href: '/ampersand', label: 'Ampersand' },
 ];
 
