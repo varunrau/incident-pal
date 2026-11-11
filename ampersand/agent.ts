@@ -184,7 +184,7 @@ export class Ampersand {
     // `ampersand` is an extension that the OpenAI types do not declare.
     const agent = {
       model: MODEL, instructions: this.instructions, tools: this.tools.definitions,
-      ampersand: { compaction: 'auto', allow_silent_completion: false },
+      ampersand: { compaction: 'auto', allow_silent_completion: true },
     };
     const stream = (await this.sessions.create({
       agent, environment: { type: 'none' }, input, stream: true, toolHandlers: this.toolHandlers,

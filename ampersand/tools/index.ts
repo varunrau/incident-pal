@@ -9,7 +9,6 @@ import { getFlagHistory } from './get_flag_history.js';
 import { getFlags } from './get_flags.js';
 import { listChannels } from './list_channels.js';
 import { listRoutines } from './list_routines.js';
-import { pass } from './pass.js';
 import { queryLogs } from './query_logs.js';
 import { readChannel } from './read_channel.js';
 import { scheduleRoutine } from './schedule_routine.js';
@@ -54,7 +53,6 @@ export function createAgentTools(chat: Chat, telemetry: Telemetry, routines: Rou
   register(scheduleRoutine(routines));
   register(listRoutines(routines));
   register(cancelRoutine(routines));
-  register(pass);
 
   return {
     definitions: [...tools.values()].map(tool => tool.schema),
