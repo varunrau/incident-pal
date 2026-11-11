@@ -1,6 +1,7 @@
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 import type { Dashboard, FlagLog, Health, Level, RequestLog } from '../types.js';
-import { ConnectionLabel, flagState, Masthead, mount, time, usePolled } from '../../shared/client/ui.js';
+import { flagState, time } from '../../shared/client/helpers.js';
+import { ConnectionLabel, Masthead, mount, usePolled } from '../../shared/client/ui.js';
 
 const number = new Intl.NumberFormat();
 const CHART_MIN_WIDTH = 280;

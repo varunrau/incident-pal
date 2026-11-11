@@ -25,12 +25,6 @@ export class TranscriptLoadError extends AmpersandError {
   }
 }
 
-export class AmpersandClosedError extends AmpersandError {
-  constructor() {
-    super('Ampersand is shutting down.', 503);
-  }
-}
-
 export class UnknownToolError extends AmpersandError {
   constructor(name: string) {
     super(`Unknown tool: ${name}`, 400);

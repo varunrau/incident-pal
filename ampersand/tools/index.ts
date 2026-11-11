@@ -1,6 +1,6 @@
 import { Ajv } from 'ajv';
 import type { Chat } from '../../messenger/chat.js';
-import type { createTelemetry } from '../../payments/telemetry.js';
+import type { Telemetry } from '../../payments/telemetry.js';
 import type { AgentTools } from '../agent.js';
 import { InvalidToolArgumentsError, UnknownToolError } from '../errors.js';
 import { getFlagHistory } from './get_flag_history.js';
@@ -21,7 +21,7 @@ export interface Tool<T extends object = Record<string, never>> {
   execute: (args: T) => object | Promise<object>;
 }
 
-export function createAgentTools(chat: Chat, telemetry: ReturnType<typeof createTelemetry>): AgentTools {
+export function createAgentTools(chat: Chat, telemetry: Telemetry): AgentTools {
   const ajv = new Ajv();
   const tools = new Map<string, {
     schema: { type: 'function'; name: string; description: string; parameters: ReturnType<typeof object> };

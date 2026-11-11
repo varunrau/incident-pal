@@ -1,14 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import type { Chat } from '../chat.js';
-import type { ChatSession } from '../types.js';
+import { withAuth, type Requirements } from './auth.js';
 
-export function createParticipant(app: FastifyInstance, chat: Chat) {
-  app.post<{ Body: { name: string }; Reply: ChatSession }>('/participants', {
+export function createParticipant(app: FastifyInstance, chat: Chat, auth: Requirements) {
+  app.post<{ Body: { name: string } }>('/participants', {
     schema: {
       body: {
         type: 'object', required: ['name'], additionalProperties: false,
         properties: { name: { type: 'string', minLength: 1, maxLength: 40, pattern: '\\S' } },
       },
     },
-  }, async ({ body, headers }, reply) => reply.code(201).send(chat.join(body.name.trim(), headers.authorization)));
+  }, withAuth(auth.optionalParticipant, async ({ body }, reply, previous) =>
+    reply.code(201).send(chat.join(body.name.trim(), previous))));
 }

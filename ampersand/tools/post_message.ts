@@ -2,7 +2,7 @@ import type { Chat } from '../../messenger/chat.js';
 import type { Tool } from './index.js';
 import { channelField, object } from './schemas.js';
 
-const ampersandAuthor = { id: 'agent:ampersand', name: 'Ampersand' };
+const ampersandAuthor = { id: 'agent:ampersand', name: 'Ampersand', avatar: '/pal.svg' };
 
 export function postMessage(chat: Chat): Tool<{ channel: string; text: string }> {
   return {
@@ -13,5 +13,5 @@ export function postMessage(chat: Chat): Tool<{ channel: string; text: string }>
       text: { type: 'string', minLength: 1, maxLength: 2_000, pattern: '\\S' },
     }, ['channel', 'text']),
     execute: ({ channel, text }) => ({ message: chat.postMessage(channel, ampersandAuthor, text.trim()) }),
-    };
+  };
 }

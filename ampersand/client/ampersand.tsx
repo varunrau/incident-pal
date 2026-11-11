@@ -1,26 +1,33 @@
 import { useEffect, useState } from 'react';
 import type { AmpersandTranscript, AmpersandTranscriptItem } from '../types.js';
-import { Masthead, mount, request } from '../../shared/client/ui.js';
+import { errorMessage, request } from '../../shared/client/helpers.js';
+import { Masthead, mount } from '../../shared/client/ui.js';
 
 const integer = new Intl.NumberFormat();
 const usd = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 6 });
 const EMPTY = '—';
 
+function summary(item: AmpersandTranscriptItem) {
+  switch (item.type) {
+    case 'message': return 'Raw message';
+    case 'function_call': return ['Tool call', item.name, item.status].join(' · ');
+    case 'function_call_output': return ['Tool result', item.callId, item.status].join(' · ');
+    case 'other': return item.itemType;
+  }
+}
+
 function TranscriptRow({ item }: { item: AmpersandTranscriptItem }) {
-  const isMessage = item.type === 'message';
-  const speaker = item.role === 'assistant' ? 'Ampersand' : (item.metadata?.sender_name ?? item.role ?? 'Message');
-  const label = item.type === 'function_call' ? 'Tool call'
-    : item.type === 'function_call_output' ? 'Tool result'
-    : item.type ?? 'Transcript item';
   return (
     <li>
-      {isMessage && <>
-        <strong>{[speaker, item.metadata?.channel && `#${item.metadata.channel}`].filter(Boolean).join(' · ')}</strong>
-        <p>{item.content?.map(part => part.text ?? `[${part.type ?? 'content'}]`).join('\n') ?? ''}</p>
+      {item.type === 'message' && <>
+        <strong>
+          {[item.role === 'assistant' ? 'Ampersand' : item.senderName ?? item.role, item.channel && `#${item.channel}`].filter(Boolean).join(' · ')}
+        </strong>
+        <p>{item.text}</p>
       </>}
       <details>
-        <summary>{isMessage ? 'Raw message' : [label, item.name ?? item.call_id, item.status].filter(Boolean).join(' · ')}</summary>
-        <pre>{JSON.stringify(item, null, 2)}</pre>
+        <summary>{summary(item)}</summary>
+        <pre>{JSON.stringify(item.raw, null, 2)}</pre>
       </details>
     </li>
   );
@@ -43,11 +50,11 @@ function TranscriptPage() {
       setTranscript(data);
       setItems(current => older ? [...rows, ...current] : rows);
       setStatus({
-        text: !data.sessionId ? 'The Ampersand session is not available yet.' : count ? '' : 'No transcript items yet.',
+        text: !data.sessionId ? 'The Ampersand session starts with the first chat message.' : count ? '' : 'No transcript items yet.',
         error: false,
       });
     } catch (error) {
-      setStatus({ text: error instanceof Error ? error.message : 'Could not load the transcript.', error: true });
+      setStatus({ text: errorMessage(error, 'Could not load the transcript.'), error: true });
     } finally {
       setLoading(false);
     }

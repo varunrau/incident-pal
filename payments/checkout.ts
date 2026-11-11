@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { FastifyBaseLogger, FastifyError, FastifyPluginAsync } from 'fastify';
 import { shoppers } from '../shared/demo-shoppers.js';
-import type { createTelemetry } from './telemetry.js';
+import type { Telemetry } from './telemetry.js';
 import { routes, type Route, type RequestError, type RequestLog } from './types.js';
 
 declare module 'fastify' {
@@ -18,7 +18,7 @@ function checkoutError(statusCode: number, code: string, message: string) {
   return Object.assign(new Error(message), { statusCode, code });
 }
 
-export const checkoutRoutes: FastifyPluginAsync<{ telemetry: ReturnType<typeof createTelemetry> }> = async (app, { telemetry }) => {
+export const checkoutRoutes: FastifyPluginAsync<{ telemetry: Telemetry }> = async (app, { telemetry }) => {
   const carts = new Map<string, { expiresAt: number; currency: string }>();
   app.decorateRequest('checkoutError', null);
   app.decorateRequest('checkoutDetails', null);

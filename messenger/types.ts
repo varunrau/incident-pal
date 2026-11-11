@@ -6,7 +6,8 @@ export interface ChatChannel {
 export interface ChatAuthor {
   id: string;
   name: string;
-  avatar?: string;
+  // URL of the author's avatar image.
+  avatar: string;
 }
 
 export interface ChatMessage {

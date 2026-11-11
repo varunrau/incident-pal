@@ -70,12 +70,14 @@ const rosterAvatars = new Map([
   ['Alex Kim', 'acorn-ram'],
 ]);
 const joinAvatars = ['pebble-turtle', 'sun-puff', 'moss-hare', 'reef-axolotl'];
+const defaultAvatar = joinAvatars[0];
 
 const historyLimit = 100;
 const seedMessageSpacingMs = 60_000;
 
 export const messageLimit = 2_000;
 export const avatarNames = [...rosterAvatars.values(), ...joinAvatars];
+const avatarUrl = (name: string) => `/api/chat/avatars/${name}.webp`;
 
 interface HistoryEntry {
   message: ChatMessage;
@@ -115,20 +117,20 @@ export class Chat {
     for (const [index, [channel, name, text]] of projectHistory.entries()) {
       this.histories.get(channel)?.push({
         message: {
-          id: ++this.sequence, channel, author: { id: `seed:${name}`, name, avatar: rosterAvatars.get(name) }, text,
+          id: ++this.sequence, channel, author: { id: `seed:${name}`, name, avatar: avatarUrl(rosterAvatars.get(name) ?? defaultAvatar) }, text,
           at: now - (projectHistory.length - index) * seedMessageSpacingMs,
         },
       });
     }
   }
 
-  participant(authorization?: string) {
-    if (authorization?.startsWith('Bearer ')) return this.participants.get(authorization.slice(7));
+  participant(token: string) {
+    return this.participants.get(token);
   }
 
   // A returning participant keeps their avatar when they change their name.
-  join(name: string, authorization?: string): ChatSession {
-    const avatar = this.participant(authorization)?.avatar ?? this.pickAvatar();
+  join(name: string, previous?: ChatAuthor): ChatSession {
+    const avatar = previous?.avatar ?? avatarUrl(this.pickAvatar());
     const author = { id: randomUUID(), name, avatar };
     const token = randomUUID();
     this.participants.set(token, author);

@@ -49,7 +49,7 @@ For a demo with people on the same trusted network, run `HOST=0.0.0.0 npm start`
 
 ## Ampersand incident agent
 
-The app uses one [Ampersand](https://ampersand.humansand.ai/docs/GUIDES.html) agent on `ampersand-v0.1`. The server creates its session at startup, seeded with a short message because Ampersand requires input to create one, and will not start if Ampersand rejects the request.
+The app uses one [Ampersand](https://ampersand.humansand.ai/docs/GUIDES.html) agent on `ampersand-v0.1`. The server creates its session when the first chat message arrives. If a turn fails and the session is no longer usable, the server deletes it and the next message creates a new one. The session is deleted on shutdown.
 
 1. Open **Chat** and join with a display name. Turn on **Strict payment validation** in **Feature flags**.
 2. Ask Ampersand to investigate in **#incident-response** once failures appear in **Request logs**.
@@ -59,11 +59,11 @@ The app uses one [Ampersand](https://ampersand.humansand.ai/docs/GUIDES.html) ag
 
 Ampersand can turn any feature flag on or off at its discretion. Flag history records changes made by the agent. Chat and delivery receipts are held in memory.
 
-One Ampersand session receives new human messages across all channels. The agent reads retained chat history, payment logs, and flag history as needed and decides whether to post a status update. Agent posts return as tool receipts.
+One Ampersand session receives new human messages across all channels, one turn at a time. Messages that arrive during a turn are sent together in the next one. The agent reads retained chat history, payment logs, and flag history as needed and decides whether to post a status update. Agent posts return as tool receipts.
 
 ### Tool interface
 
-Ampersand calls these tools through its session, and calls in the same turn run in parallel.
+Ampersand calls these tools through its session. The OpenAI SDK runs each call and submits the result.
 
 | Tool | Example input |
 | --- | --- |

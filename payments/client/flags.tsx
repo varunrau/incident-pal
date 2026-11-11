@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FlagId, FlagLog, FlagValues } from '../types.js';
-import { ConnectionLabel, flagState, Masthead, mount, request, time, usePolled } from '../../shared/client/ui.js';
+import { errorMessage, flagState, request, time } from '../../shared/client/helpers.js';
+import { ConnectionLabel, Masthead, mount, usePolled } from '../../shared/client/ui.js';
 
 function FlagsPage() {
   const { data: flags, connected, refresh } = usePolled<FlagLog>('/api/flags');
@@ -12,9 +13,9 @@ function FlagsPage() {
     setPending(true);
     setFeedback('');
     try {
-      await request<FlagValues>('/api/flags', { flag, enabled: !flags.current[flag] });
+      await request<FlagValues>('/api/flags', { body: { flag, enabled: !flags.current[flag] } });
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : 'Flag change failed.');
+      setFeedback(errorMessage(error, 'Flag change failed.'));
     } finally {
       await refresh();
       setPending(false);

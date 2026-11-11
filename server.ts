@@ -6,7 +6,7 @@ import { Ampersand } from './ampersand/agent.js';
 import { Chat } from './messenger/chat.js';
 import { chatRoutes } from './messenger/routes/index.js';
 import { checkoutRoutes, startShoppers } from './payments/checkout.js';
-import { createTelemetry } from './payments/telemetry.js';
+import { Telemetry } from './payments/telemetry.js';
 import { createAgentTools } from './ampersand/tools/index.js';
 import { level, object, setFlagBody } from './ampersand/tools/schemas.js';
 import type { Level, SetFlag } from './payments/types.js';
@@ -20,9 +20,8 @@ export function buildApp({
 
   const app = Fastify({ logger, logController: new LogController({ disableRequestLogging: true }) });
   const chat = new Chat();
-  const telemetry = createTelemetry();
+  const telemetry = new Telemetry();
   const agent = new Ampersand(ampersandApiKey, createAgentTools(chat, telemetry), app.log);
-  app.addHook('onReady', () => agent.start());
   app.addHook('preClose', () => agent.close());
 
   app.get<{ Querystring: { after?: string; sessionId?: string } }>('/api/ampersand/transcript', {
