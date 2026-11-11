@@ -51,33 +51,6 @@ send(input)
       observers.turnEnded
 ```
 
-Two `TurnObserver`s watch each turn without the agent knowing what they do:
-
-| Observer | Reacts to | Effect |
-| --- | --- | --- |
-| `ThinkingIndicator` | the first tool call, then `post_message` or `pass` | Shows and clears "Ampersand is thinking…" in the channels the turn is answering |
-| `Routines` | `turnEnded` | Clears the pending run, so the next tick for that routine can fire |
-
-A flag change takes two trips through the agent, because a person has to approve it in between:
-
-```mermaid
-sequenceDiagram
-    participant Person
-    participant Chat
-    participant Agent as Ampersand
-    participant Telemetry
-    Person->>Chat: "turn strict validation off"
-    Chat->>Agent: onMessage → send()
-    Agent->>Chat: update_flag → requestApproval()
-    Chat-->>Person: approval card (Approve / Reject)
-    Person->>Chat: POST decision
-    Chat->>Telemetry: settleFlagRequest → setFlag(source: agent)
-    Chat->>Agent: onDecision → send("Maya approved…")
-    Agent->>Chat: post_message confirmation
-```
-
-The flag is changed by `settleFlagRequest` in the server, not by the model, so approving applies exactly the action stored on the card.
-
 ### Chat
 
 The server's `Chat` (`messenger/chat.ts`) holds channels, participants, and the last 100 messages per channel. Every change is broadcast to each open browser as a server-sent event. Browsers write with plain POSTs and read only from the stream.
@@ -95,14 +68,6 @@ messenger/
     ├── use_unread.ts       # per-channel read times in localStorage
     └── actions/       # one fetch wrapper per POST
 ```
-
-| SSE event | Sent when | Client effect |
-| --- | --- | --- |
-| `snapshot` | a browser connects | Replaces all channels, messages, and thinking state |
-| `channel` | a channel is created | Adds it to the sidebar |
-| `message` | anyone (or Ampersand) posts | Appends to the channel |
-| `message_updated` | an approval is decided | Replaces the message so the card shows the outcome |
-| `thinking` | a turn starts or stops working on a channel | Shows or hides the indicator |
 
 ```ts
 <ChatPage> (messenger/client/chat.tsx)
@@ -124,13 +89,9 @@ messenger/
 shopper loop (×4, payments/checkout.ts)
   GET  /shop/products
   POST /shop/cart       { productId, currency }
-  POST /shop/checkout   { cartId, currency on odd runs only }
-    if strict_payment_validation and payment currency ≠ cart currency
-      → 502 PAYMENT_PROVIDER_REJECTED
+  POST /shop/checkout   { cartId, currency? }
   onResponse → telemetry.record()   # level = error if status ≥ 400
 ```
-
-Because only odd runs send a currency, turning on **Strict payment validation** makes some checkouts fail with 502.
 
 The dashboard polls `GET /api/dashboard` every second. `telemetry.health()` counts the logs from the last 2 minutes into 24 five-second buckets and returns the flag changes in that window as markers.
 
@@ -155,8 +116,6 @@ npm ci
 npm start
 ```
 
-Open [the dashboard](http://127.0.0.1:3000). Set `PORT` to change the port. The server binds to loopback by default. Run `npm run check` for a type check.
-
 ## Demo
 
-[Watch the Storeify demo video](docs/storeify.mp4) (MP4, 87 MB).
+[Watch the Storeify demo video](docs/storeify.mp4).
