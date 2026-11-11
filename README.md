@@ -156,3 +156,7 @@ npm start
 ```
 
 Open [the dashboard](http://127.0.0.1:3000). Set `PORT` to change the port. The server binds to loopback by default. Run `npm run check` for a type check.
+
+## Demo
+
+[Watch the Storeify demo video](docs/storeify.mp4) (MP4, 87 MB).
