@@ -55,7 +55,7 @@ export function Masthead({ current }: { current: string }) {
       <div className="masthead-inner">
         <div className="brand">
           <img src="/pal.svg" width="26" height="26" alt="" />
-          <strong>Incident Pal</strong>
+          <strong>Storeify</strong>
         </div>
         <nav className="app-nav" aria-label="Main">
           {pages.map(({ href, label }) => (

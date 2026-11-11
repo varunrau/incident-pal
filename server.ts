@@ -3,11 +3,14 @@ import { loadEnvFile } from 'node:process';
 import { pathToFileURL } from 'node:url';
 import Fastify, { LogController } from 'fastify';
 import { Ampersand } from './ampersand/agent.js';
+import { Routines } from './ampersand/routines.js';
+import { ThinkingIndicator } from './ampersand/thinking.js';
 import { Chat } from './messenger/chat.js';
 import { chatRoutes } from './messenger/routes/index.js';
 import { checkoutRoutes, startShoppers } from './payments/checkout.js';
 import { Telemetry } from './payments/telemetry.js';
 import { createAgentTools } from './ampersand/tools/index.js';
+import { settleFlagRequest } from './ampersand/tools/update_flag.js';
 import { level, object, setFlagBody } from './ampersand/tools/schemas.js';
 import type { Level, SetFlag } from './payments/types.js';
 
@@ -21,8 +24,12 @@ export function buildApp({
   const app = Fastify({ logger, logController: new LogController({ disableRequestLogging: true }) });
   const chat = new Chat();
   const telemetry = new Telemetry();
-  const agent = new Ampersand(ampersandApiKey, createAgentTools(chat, telemetry), app.log);
-  app.addHook('preClose', () => agent.close());
+  const routines = new Routines(chat, input => agent.send(input));
+  const agent = new Ampersand(ampersandApiKey, createAgentTools(chat, telemetry, routines), app.log, [new ThinkingIndicator(chat), routines]);
+  app.addHook('preClose', () => {
+    routines.close();
+    return agent.close();
+  });
 
   app.get<{ Querystring: { after?: string; sessionId?: string } }>('/api/ampersand/transcript', {
     schema: {
@@ -47,6 +54,20 @@ export function buildApp({
         metadata: {
           source: 'chat', sender: message.author.id, sender_name: message.author.name,
           channel: message.channel, timestamp: Math.floor(message.at / 1_000),
+        },
+      });
+    },
+    onDecision(decision) {
+      const { approval, channel, author } = decision;
+      const outcome = settleFlagRequest(telemetry, decision);
+      const { flag, enabled } = approval.action;
+      const verb = decision.decision === 'approve' ? 'approved' : 'rejected';
+      agent.send({
+        id: `approval:${approval.id}`,
+        text: `${author.name} ${verb} your request to turn ${flag} ${enabled ? 'on' : 'off'}. ${outcome}`,
+        metadata: {
+          source: 'approval', sender: author.id, sender_name: author.name, channel,
+          approval_id: approval.id, timestamp: Math.floor(Date.now() / 1_000),
         },
       });
     },

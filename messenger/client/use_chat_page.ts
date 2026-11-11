@@ -1,6 +1,7 @@
 import { useEffect, useReducer } from 'react';
 import { errorMessage, isUnauthorized } from '../../shared/client/helpers.js';
-import type { ChatChannel, ChatSession } from '../types.js';
+import type { ApprovalDecision, ChatChannel, ChatSession } from '../types.js';
+import { decideApproval } from './actions/decide_approval.js';
 import { createChannel } from './actions/create_channel.js';
 import { joinChat } from './actions/join_chat.js';
 import { sendMessage } from './actions/send_message.js';
@@ -106,6 +107,18 @@ export function useChatPage() {
     }
   }
 
+  async function decide(id: string, decision: ApprovalDecision) {
+    if (!session) return;
+    dispatch({ type: 'show-error', error: '' });
+    try {
+      await decideApproval(id, decision, session.token);
+    } catch (failure) {
+      dispatch(isUnauthorized(failure)
+        ? { type: 'expired', action: `${decision} the request` }
+        : { type: 'show-error', error: errorMessage(failure, `Could not ${decision} the request.`) });
+    }
+  }
+
   async function join(name: string) {
     if (dialog.type !== 'join' || dialog.busy) return;
     if (!name) {
@@ -141,6 +154,7 @@ export function useChatPage() {
   return {
     ...state,
     send,
+    decide,
     join,
     addChannel,
     openJoin: () => dispatch({ type: 'open-join' }),

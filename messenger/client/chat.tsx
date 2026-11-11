@@ -1,11 +1,13 @@
 import MarkdownIt from 'markdown-it/browser';
 import {
-  memo, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore,
-  type FormEvent, type ReactNode, type RefObject,
+  createContext, Fragment, memo, useContext, useEffect, useLayoutEffect, useReducer, useRef, useState,
+  useSyncExternalStore, type FormEvent, type ReactNode, type RefObject,
 } from 'react';
+import { flagLabel } from '../../payments/types.js';
 import { Masthead, mount } from '../../shared/client/ui.js';
-import type { ChatAuthor, ChatChannel, ChatMessage, ChatSnapshot } from '../types.js';
+import type { ApprovalDecision, ChatApproval, ChatAuthor, ChatChannel, ChatMessage, ChatSnapshot, ChatThinking } from '../types.js';
 import { useChatPage, type ChatDialog as ChatDialogState } from './use_chat_page.js';
+import { useUnread } from './use_unread.js';
 
 const FALLBACK_AVATAR = '/api/chat/avatars/pebble-turtle.webp';
 const HISTORY_LIMIT = 100;
@@ -13,19 +15,34 @@ const STICK_TO_BOTTOM_PX = 48;
 
 // html is disabled, so message text cannot inject markup when rendered with dangerouslySetInnerHTML.
 const markdown = new MarkdownIt({ html: false, linkify: true }).disable('image');
-const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const clock = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 const fullTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
+const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+const relativeDay = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+const startOfDay = (ms: number) => new Date(ms).setHours(0, 0, 0, 0);
+
+// "Today", "Yesterday", or the weekday and date for older messages.
+function dayLabel(ms: number) {
+  const days = Math.round((startOfDay(Date.now()) - startOfDay(ms)) / 86_400_000);
+  const label = days < 2 ? relativeDay.format(-days, 'day') : weekday.format(ms);
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
 
 interface ChatState {
   status: 'connecting' | 'open' | 'lost';
   channels: ChatChannel[];
   messages: Record<string, ChatMessage[]>;
+  // Channels where Ampersand is working on a reply.
+  thinking: string[];
 }
 
 type ChatAction =
   | { type: 'snapshot'; snapshot: ChatSnapshot }
   | { type: 'channel'; channel: ChatChannel }
   | { type: 'message'; message: ChatMessage }
+  | { type: 'message_updated'; message: ChatMessage }
+  | { type: 'thinking'; update: ChatThinking }
   | { type: 'lost' };
 
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -33,7 +50,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'snapshot': {
       const messages: ChatState['messages'] = Object.fromEntries(action.snapshot.channels.map(channel => [channel.id, []]));
       for (const message of action.snapshot.messages) messages[message.channel]?.push(message);
-      return { status: 'open', channels: action.snapshot.channels, messages };
+      return { status: 'open', channels: action.snapshot.channels, messages, thinking: action.snapshot.thinking };
     }
     case 'channel':
       if (state.messages[action.channel.id]) return state;
@@ -47,18 +64,31 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (!rows) return state;
       return { ...state, messages: { ...state.messages, [action.message.channel]: [...rows, action.message].slice(-HISTORY_LIMIT) } };
     }
+    case 'message_updated': {
+      const rows = state.messages[action.message.channel];
+      if (!rows?.some(row => row.id === action.message.id)) return state;
+      const updated = rows.map(row => row.id === action.message.id ? action.message : row);
+      return { ...state, messages: { ...state.messages, [action.message.channel]: updated } };
+    }
+    case 'thinking': {
+      const { channel, thinking } = action.update;
+      const others = state.thinking.filter(id => id !== channel);
+      return { ...state, thinking: thinking ? [...others, channel] : others };
+    }
     case 'lost':
       return { ...state, status: 'lost' };
   }
 }
 
 function useChatStream() {
-  const [state, dispatch] = useReducer(chatReducer, { status: 'connecting', channels: [], messages: {} });
+  const [state, dispatch] = useReducer(chatReducer, { status: 'connecting', channels: [], messages: {}, thinking: [] });
   useEffect(() => {
     const events = new EventSource('/api/chat/events');
     events.addEventListener('snapshot', event => dispatch({ type: 'snapshot', snapshot: JSON.parse(event.data) }));
     events.addEventListener('channel', event => dispatch({ type: 'channel', channel: JSON.parse(event.data) }));
     events.addEventListener('message', event => dispatch({ type: 'message', message: JSON.parse(event.data) }));
+    events.addEventListener('message_updated', event => dispatch({ type: 'message_updated', message: JSON.parse(event.data) }));
+    events.addEventListener('thinking', event => dispatch({ type: 'thinking', update: JSON.parse(event.data) }));
     events.addEventListener('error', () => dispatch({ type: 'lost' }));
     return () => events.close();
   }, []);
@@ -79,6 +109,47 @@ function Avatar({ author }: { author: ChatAuthor }) {
   );
 }
 
+// Lets approval cards decide without passing a changing callback through the memoized rows.
+const ApprovalContext = createContext<{ ownId?: string; decide?: (id: string, decision: ApprovalDecision) => Promise<void> }>({});
+
+function ApprovalCard({ approval }: { approval: ChatApproval }) {
+  const { ownId, decide } = useContext(ApprovalContext);
+  const names = approval.approvers.map(approver => approver.name).join(', ');
+  const canDecide = Boolean(decide) && approval.approvers.some(approver => approver.id === ownId);
+  const [busy, setBusy] = useState(false);
+  const { flag, enabled } = approval.action;
+
+  async function choose(decision: ApprovalDecision) {
+    if (!decide || !canDecide) return;
+    setBusy(true);
+    try {
+      await decide(approval.id, decision);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className={`approval-card ${approval.status}`} role="group" aria-label="Approval request">
+      <p className="approval-action">Turn <strong>{flagLabel(flag)}</strong> {enabled ? 'on' : 'off'}</p>
+      {approval.status === 'pending' ? (
+        <div className="approval-buttons">
+          {canDecide ? <>
+            <button type="button" className="approve" disabled={busy} onClick={() => void choose('approve')}>Approve</button>
+            <button type="button" className="reject" disabled={busy} onClick={() => void choose('reject')}>Reject</button>
+          </> : <span>Waiting on {names}.</span>}
+        </div>
+      ) : (
+        <p className="approval-outcome">
+          <strong>{approval.status === 'approved' ? 'Approved' : 'Rejected'}</strong>
+          {approval.decidedBy && ` by ${approval.decidedBy.name}`}
+          {approval.decidedAt && <> at <time dateTime={new Date(approval.decidedAt).toISOString()}>{clock.format(approval.decidedAt)}</time></>}
+        </p>
+      )}
+    </div>
+  );
+}
+
 const MessageRow = memo(function MessageRow({ message }: { message: ChatMessage }) {
   return (
     <article className="chat-message">
@@ -89,12 +160,13 @@ const MessageRow = memo(function MessageRow({ message }: { message: ChatMessage 
           <time dateTime={new Date(message.at).toISOString()} title={fullTime.format(message.at)}>{clock.format(message.at)}</time>
         </div>
         <p dangerouslySetInnerHTML={{ __html: markdown.renderInline(message.text) }} />
+        {message.approval && <ApprovalCard approval={message.approval} />}
       </div>
     </article>
   );
 });
 
-function History({ channel, messages, ownId }: { channel?: ChatChannel; messages: ChatMessage[]; ownId?: string }) {
+function History({ channel, messages, ownId, thinking }: { channel?: ChatChannel; messages: ChatMessage[]; ownId?: string; thinking: boolean }) {
   const element = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
@@ -108,6 +180,10 @@ function History({ channel, messages, ownId }: { channel?: ChatChannel; messages
   useLayoutEffect(() => {
     if (atBottom.current || messages.at(-1)?.author.id === ownId) scrollToBottom();
   }, [messages, ownId]);
+  // The thinking indicator changes the history's height.
+  useLayoutEffect(() => {
+    if (atBottom.current) scrollToBottom();
+  }, [thinking]);
 
   return (
     <div
@@ -119,7 +195,14 @@ function History({ channel, messages, ownId }: { channel?: ChatChannel; messages
     >
       {!channel && <p className="chat-empty">Connecting to chat…</p>}
       {channel && !messages.length && <p className="chat-empty">No messages yet.</p>}
-      {messages.map(message => <MessageRow key={message.id} message={message} />)}
+      {messages.map((message, index) => (
+        <Fragment key={message.id}>
+          {startOfDay(message.at) !== startOfDay(messages[index - 1]?.at ?? 0) && (
+            <h3 className="chat-day"><span>{dayLabel(message.at)}</span></h3>
+          )}
+          <MessageRow message={message} />
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -250,13 +333,17 @@ function ChannelDialog({ dialog, onClose, onSubmit }: {
 }
 
 function ChatPage() {
-  const [{ status, channels, messages }, dispatch] = useChatStream();
+  const [{ status, channels, messages, thinking }, dispatch] = useChatStream();
   const hash = useSyncExternalStore(subscribeToHash, () => location.hash);
   const page = useChatPage();
   const { session, clearError } = page;
   const composerInput = useRef<HTMLInputElement>(null);
 
+  const approvals = { ownId: session?.author.id, decide: session ? page.decide : undefined };
+
   const active = channels.find(channel => hash === `#${channel.id}`) ?? channels[0];
+  const activeThinking = Boolean(active && thinking.includes(active.id));
+  const unread = useUnread(messages, channels.length > 0, active?.id, session?.author.id);
 
   useEffect(() => clearError(), [active?.id]);
   // Runs after the render that reveals the composer and closes the dialog.
@@ -283,7 +370,7 @@ function ChatPage() {
               onChange={event => { location.hash = event.target.value; }}
             >
               {!channels.length && <option value="">Connecting…</option>}
-              {channels.map(channel => <option key={channel.id} value={channel.id}># {channel.id}</option>)}
+              {channels.map(channel => <option key={channel.id} value={channel.id}># {channel.id}{unread[channel.id] ? ` (${unread[channel.id]})` : ''}</option>)}
             </select>
             <button
               type="button" className="new-channel" aria-label="New channel" title="New channel" disabled={!session}
@@ -294,7 +381,14 @@ function ChatPage() {
           </div>
           <nav id="channel-list" aria-labelledby="channel-list-heading">
             {channels.map(channel => (
-              <a key={channel.id} href={`#${channel.id}`} aria-current={channel.id === active?.id ? 'true' : undefined}>{`#  ${channel.id}`}</a>
+              <a
+                key={channel.id} href={`#${channel.id}`} className={unread[channel.id] ? 'unread' : undefined}
+                aria-current={channel.id === active?.id ? 'true' : undefined}
+                aria-label={unread[channel.id] ? `${channel.id}, ${unread[channel.id]} unread` : undefined}
+              >
+                <span>{`#  ${channel.id}`}</span>
+                {Boolean(unread[channel.id]) && <span className="unread-count" aria-hidden="true">{unread[channel.id]}</span>}
+              </a>
             ))}
           </nav>
         </div>
@@ -312,9 +406,12 @@ function ChatPage() {
           <h1 id="channel-name">{active ? `# ${active.id}` : 'Chat'}</h1>
           <p hidden={!active?.topic}>{active?.topic}</p>
         </header>
-        <History channel={active} messages={(active && messages[active.id]) ?? []} ownId={session?.author.id} />
+        <ApprovalContext.Provider value={approvals}>
+          <History channel={active} messages={(active && messages[active.id]) ?? []} ownId={session?.author.id} thinking={activeThinking} />
+        </ApprovalContext.Provider>
         <p className="chat-notice" role="status" hidden={status !== 'lost'}>Reconnecting to chat…</p>
         <p className="chat-notice error-text" role="status" hidden={!page.error}>{page.error}</p>
+        <p className="chat-notice chat-thinking" role="status" hidden={!activeThinking}>Ampersand is thinking…</p>
         <Composer
           channel={active?.id} enabled={Boolean(session)} sending={page.sending} input={composerInput}
           onSend={(channel, text) => page.send(channel, text, status === 'open')}

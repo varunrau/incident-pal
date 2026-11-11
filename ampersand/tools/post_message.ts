@@ -2,7 +2,7 @@ import type { Chat } from '../../messenger/chat.js';
 import type { Tool } from './index.js';
 import { channelField, object } from './schemas.js';
 
-const ampersandAuthor = { id: 'agent:ampersand', name: 'Ampersand', avatar: '/pal.svg' };
+export const ampersandAuthor = { id: 'agent:ampersand', name: 'Ampersand', avatar: '/pal.svg' };
 
 export function postMessage(chat: Chat): Tool<{ channel: string; text: string }> {
   return {

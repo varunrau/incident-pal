@@ -36,3 +36,15 @@ export class InvalidToolArgumentsError extends AmpersandError {
     super(`Invalid ${name} arguments: ${details}`, 400);
   }
 }
+
+export class RoutineLimitError extends AmpersandError {
+  constructor(max: number) {
+    super(`You already have ${max} routines. Cancel one before scheduling another.`, 400);
+  }
+}
+
+export class RoutineNotFoundError extends AmpersandError {
+  constructor(id: string) {
+    super(`No active routine with ID ${id}. It may have expired or been cancelled.`, 404);
+  }
+}

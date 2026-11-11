@@ -151,6 +151,12 @@ td button:hover { text-decoration: underline; }
 #channel-list a { display: flex; align-items: center; min-height: 27px; padding: 3px 9px; color: var(--muted); text-decoration: none; font-size: 13px; overflow-wrap: anywhere; }
 #channel-list a:hover, #channel-list a[aria-current] { background: var(--selected); border-radius: 4px; color: var(--ink); }
 #channel-list a[aria-current] { font-weight: 600; }
+#channel-list a { justify-content: space-between; gap: 8px; }
+#channel-list a.unread { color: var(--ink); font-weight: 600; }
+.unread-count { flex: none; min-width: 18px; padding: 1px 6px; border-radius: 9px; background: var(--accent); color: var(--paper); font-size: 11px; font-weight: 600; line-height: 16px; text-align: center; }
+.chat-day { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.chat-day::before, .chat-day::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.chat-history > .chat-day:first-child { margin-top: 0; }
 #channel-picker { display: none; }
 .chat-identity { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: var(--chat-footer-height); padding: 0 9px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 600; }
 #chat-author { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
@@ -172,7 +178,23 @@ td button:hover { text-decoration: underline; }
 .chat-message p { color: var(--ink); font-size: 13px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-message p a { color: var(--accent); }
 .chat-message p code { padding: 1px 3px; border-radius: 3px; background: var(--selected); font-size: .92em; }
+.approval-card { display: grid; gap: 3px; margin-top: 4px; padding-inline-start: 10px; border-inline-start: 2px solid var(--line); }
+.chat-message .approval-card p { white-space: normal; }
+.chat-message .approval-outcome { color: var(--muted); font-size: 12px; }
+.approval-card.approved .approval-outcome strong { color: var(--green); }
+.approval-card.rejected .approval-outcome strong { color: var(--red); }
+.approval-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; color: var(--muted); font-size: 12px; }
+.approval-buttons button { padding: 2px 0; border: 0; color: var(--muted); background: none; font-size: 12px; font-weight: 600; }
+.approval-buttons .approve { color: var(--green); }
+.approval-buttons button:hover:not(:disabled) { text-decoration: underline; }
+.approval-buttons button:disabled { opacity: .5; }
 .chat-notice { padding: 5px 18px; border-top: 1px solid var(--line); background: var(--canvas); font-size: 12px; }
+.chat-thinking { border-top: 0; background: none; }
+.chat-thinking:not([hidden]) { animation: thinking-pulse 1.6s ease-in-out infinite; }
+@keyframes thinking-pulse { 50% { color: var(--control-border); } }
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking:not([hidden]) { animation: none; }
+}
 .chat-composer { display: flex; align-items: center; gap: 12px; min-height: var(--chat-footer-height); padding: 7px 18px; border-top: 1px solid var(--line); background: var(--canvas); }
 .chat-composer input { flex: 1; min-width: 0; padding: 5px 0; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: var(--ink); }
 .chat-composer input:focus-visible { outline: none; border-bottom-color: var(--control-border); }

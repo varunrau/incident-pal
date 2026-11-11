@@ -55,7 +55,7 @@ function FlagsPage() {
             {flags?.history.map(event => (
               <li key={`${event.flag}-${event.at}`}>
                 <strong>{label(event.flag)}</strong> · {flagState(event.enabled)}
-                {' '}<span className="numeric">{time(event.at)} · {event.source}</span>
+                {' '}<span className="numeric">{time(event.at)} · {event.source}{event.approvedBy && `, approved by ${event.approvedBy}`}</span>
               </li>
             ))}
           </ol>

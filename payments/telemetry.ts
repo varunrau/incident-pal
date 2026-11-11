@@ -82,9 +82,9 @@ export class Telemetry {
     return this.flags;
   }
 
-  setFlag(flag: FlagId, enabled: boolean, source: FlagSource) {
+  setFlag(flag: FlagId, enabled: boolean, source: FlagSource, approvedBy?: string) {
     if (this.flags[flag] === enabled) return this.flags;
-    this.changes.push({ flag, enabled, previousEnabled: this.flags[flag], source, at: Date.now() });
+    this.changes.push({ flag, enabled, previousEnabled: this.flags[flag], source, ...(approvedBy && { approvedBy }), at: Date.now() });
     this.flags = { ...this.flags, [flag]: enabled };
     return this.flags;
   }

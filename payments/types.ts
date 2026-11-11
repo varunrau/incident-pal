@@ -9,6 +9,7 @@ export const flagDefinitions = [
 
 type FlagDefinition = (typeof flagDefinitions)[number];
 export type FlagId = FlagDefinition['id'];
+export const flagLabel = (id: FlagId) => flagDefinitions.find(flag => flag.id === id)?.label ?? id;
 export type FlagSource = 'human' | 'agent';
 
 export type FlagValues = Readonly<Record<FlagId, boolean>>;
@@ -18,6 +19,8 @@ export interface FlagChange {
   enabled: boolean;
   previousEnabled: boolean;
   source: FlagSource;
+  // The chat participant who approved an agent's change, when it went through approval.
+  approvedBy?: string;
   at: number;
 }
 

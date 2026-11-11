@@ -2,13 +2,17 @@ import { Ajv } from 'ajv';
 import type { Chat } from '../../messenger/chat.js';
 import type { Telemetry } from '../../payments/telemetry.js';
 import type { AgentTools } from '../agent.js';
+import type { Routines } from '../routines.js';
 import { InvalidToolArgumentsError, UnknownToolError } from '../errors.js';
+import { cancelRoutine } from './cancel_routine.js';
 import { getFlagHistory } from './get_flag_history.js';
 import { getFlags } from './get_flags.js';
 import { listChannels } from './list_channels.js';
+import { listRoutines } from './list_routines.js';
 import { pass } from './pass.js';
 import { queryLogs } from './query_logs.js';
 import { readChannel } from './read_channel.js';
+import { scheduleRoutine } from './schedule_routine.js';
 import type { object } from './schemas.js';
 import { postMessage } from './post_message.js';
 import { tailLogs } from './tail_logs.js';
@@ -21,7 +25,7 @@ export interface Tool<T extends object = Record<string, never>> {
   execute: (args: T) => object | Promise<object>;
 }
 
-export function createAgentTools(chat: Chat, telemetry: Telemetry): AgentTools {
+export function createAgentTools(chat: Chat, telemetry: Telemetry, routines: Routines): AgentTools {
   const ajv = new Ajv();
   const tools = new Map<string, {
     schema: { type: 'function'; name: string; description: string; parameters: ReturnType<typeof object> };
@@ -45,8 +49,11 @@ export function createAgentTools(chat: Chat, telemetry: Telemetry): AgentTools {
   register(tailLogs(telemetry));
   register(getFlags(telemetry));
   register(getFlagHistory(telemetry));
-  register(updateFlag(telemetry));
+  register(updateFlag(chat));
   register(postMessage(chat));
+  register(scheduleRoutine(routines));
+  register(listRoutines(routines));
+  register(cancelRoutine(routines));
   register(pass);
 
   return {

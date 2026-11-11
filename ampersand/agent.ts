@@ -31,6 +31,14 @@ export interface AgentTools {
   execute(name: string, args: unknown): object | Promise<object>;
 }
 
+// Follows each turn's progress. `toolStarted` runs before a tool executes and `toolFinished` after
+// it returns, including when it fails. `turnEnded` runs after the turn, whether or not it succeeded.
+export interface TurnObserver {
+  toolStarted(inputs: AgentInput[], name: string, args: unknown): void;
+  toolFinished(inputs: AgentInput[], name: string, args: unknown): void;
+  turnEnded(inputs: AgentInput[]): void;
+}
+
 const replaceNul = (text: string) => text.replaceAll('\0', '�');
 
 function toMessage({ id, text, metadata }: AgentInput) {
@@ -94,8 +102,14 @@ export class Ampersand {
   private readonly queue: AgentInput[] = [];
   private sessionId?: string;
   private running = false;
+  private current: AgentInput[] = [];
 
-  constructor(apiKey: string, private readonly tools: AgentTools, private readonly log: FastifyBaseLogger) {
+  constructor(
+    apiKey: string,
+    private readonly tools: AgentTools,
+    private readonly log: FastifyBaseLogger,
+    private readonly observers: TurnObserver[] = [],
+  ) {
     this.sessions = new OpenAI({
       apiKey, baseURL: AMPERSAND_BASE_URL, timeout: REQUEST_TIMEOUT_MS, maxRetries: MAX_RETRIES,
     }).beta.agents.sessions;
@@ -141,12 +155,16 @@ export class Ampersand {
     try {
       while (this.queue.length && !this.lifetime.signal.aborted) {
         const inputs = this.queue.splice(0);
+        this.current = inputs;
         try {
           await this.turn(inputs);
         } catch (error) {
           if (this.lifetime.signal.aborted) return;
           this.log.warn({ err: error, inputIds: inputs.map(input => input.id) }, 'Ampersand turn failed');
           await this.recover();
+        } finally {
+          this.current = [];
+          for (const observer of this.observers) observer.turnEnded(inputs);
         }
       }
     } finally {
@@ -201,11 +219,15 @@ export class Ampersand {
   // The SDK replaces a thrown error with a generic message, so failures are returned as output
   // the model can read.
   private async runTool(name: string, args: unknown) {
+    const inputs = this.current;
+    for (const observer of this.observers) observer.toolStarted(inputs, name, args);
     try {
       return await this.tools.execute(name, args);
     } catch (error) {
       this.log.warn({ err: error, tool: name }, 'Ampersand tool failed');
       return { error: error instanceof Error ? error.message : 'Tool failed.' };
+    } finally {
+      for (const observer of this.observers) observer.toolFinished(inputs, name, args);
     }
   }
 }

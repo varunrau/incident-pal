@@ -1,67 +1,9 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
-import { shoppers } from '../shared/demo-shoppers.js';
-import type { ChatAuthor, ChatChannel, ChatMessage, ChatSession, ChatSnapshot } from './types.js';
-
-type SeedMessage = [supportAuthor: string | null, text: string];
-
-const customerHistory: Record<(typeof shoppers)[number]['id'], SeedMessage[]> = {
-  'shopper-01': [
-    [null, 'Is the field notebook back in stock? I wanted to order one for a weekend trip.'],
-    ['Alex Kim', 'It’s back in stock. The product page should let you add it to your cart now.'],
-    [null, 'That worked. I placed the order from my phone and got the receipt.'],
-    ['Alex Kim', 'Glad it went through. You’ll get a separate email when it ships.'],
-  ],
-  'shopper-02': [
-    [null, 'Mon panier affiche des euros. Le reçu sera-t-il aussi en euros ?'],
-    ['Maya Chen', 'Oui, le reçu utilise la devise affichée au moment du paiement.'],
-    [null, 'Merci. Je viens de finaliser ma commande et le reçu indique bien le montant attendu.'],
-    ['Maya Chen', 'Parfait. N’hésitez pas à nous écrire sur ce canal si vous avez besoin d’une copie plus tard.'],
-  ],
-  'shopper-03': [
-    [null, 'I left a notebook in my cart this morning and it was gone when I came back.'],
-    ['Priya Shah', 'Inactive carts expire. Add the notebook again to get a fresh cart.'],
-    [null, 'I added it again and the new order went through.'],
-    ['Priya Shah', 'Thanks for checking. Your order confirmation should be in your inbox.'],
-  ],
-  'shopper-04': [
-    [null, 'I got a receipt, but the tracking page hasn’t updated yet.'],
-    ['Jon Reyes', 'Tracking starts updating after the carrier scans the parcel. The receipt confirms we received the order.'],
-    [null, 'It updated this afternoon. Thanks for explaining the difference.'],
-    ['Jon Reyes', 'Glad it’s moving. The tracking page will show the delivery estimate.'],
-  ],
-};
-
-const customerChannels = shoppers.map(({ id, name }) => {
-  const slug = name.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return {
-    id: `customer-${slug}`, name, topic: `Customer support for ${name} · ${id}`, history: customerHistory[id],
-  };
-});
-
-const defaultChannels: ChatChannel[] = [
-  { id: 'incident-response', topic: 'Technical discussion for responders' },
-  { id: 'global-incident-status', topic: 'Updates on impact and recovery for stakeholders' },
-  { id: 'all-water-cooler', topic: 'General workspace conversation' },
-  { id: 'eng-core-payments', topic: 'Checkout and payment engineering' },
-  { id: 'eng-growth', topic: 'Growth experiments and onboarding' },
-  { id: 'eng-fulfillment', topic: 'Orders, inventory, and fulfillment' },
-  ...customerChannels.map(({ id, topic }) => ({ id, topic })),
-];
-
-const projectHistory: Array<[channel: string, author: string, text: string]> = [
-  ['all-water-cooler', 'Maya Chen', 'Coffee in the kitchen if anyone needs a refill.'],
-  ['all-water-cooler', 'Priya Shah', 'Thanks! I’ll swing by after standup.'],
-  ['eng-core-payments', 'Jon Reyes', 'Checkout smoke tests passed this morning. Browse, cart, and payment all returned 2xx.'],
-  ['eng-core-payments', 'Maya Chen', 'Thanks. I’ll check the payment logs after the next test run.'],
-  ['eng-growth', 'Priya Shah', 'The onboarding copy experiment is ready for a review.'],
-  ['eng-growth', 'Alex Kim', 'I’ll check the mobile flow this afternoon.'],
-  ['eng-fulfillment', 'Alex Kim', 'Inventory sync finished. The field notebook is available for checkout.'],
-  ['eng-fulfillment', 'Jon Reyes', 'Thanks. The fulfillment job still starts when checkout creates an order.'],
-  ...customerChannels.flatMap(({ id, name, history }) =>
-    history.map(([supportAuthor, message]): [string, string, string] => [id, supportAuthor ?? name, message])),
-];
+import { seedChannels, seedMessages } from './seed.js';
+import type {
+  ApprovalAction, ApprovalDecision, ChatApproval, ChatAuthor, ChatChannel, ChatMessage, ChatSession, ChatSnapshot, ChatThinking,
+} from './types.js';
 
 const rosterAvatars = new Map([
   ['Maya Chen', 'sprout-gecko'],
@@ -73,7 +15,6 @@ const joinAvatars = ['pebble-turtle', 'sun-puff', 'moss-hare', 'reef-axolotl'];
 const defaultAvatar = joinAvatars[0];
 
 const historyLimit = 100;
-const seedMessageSpacingMs = 60_000;
 
 export const messageLimit = 2_000;
 export const avatarNames = [...rosterAvatars.values(), ...joinAvatars];
@@ -100,27 +41,59 @@ export class ChannelExistsError extends Error {
   }
 }
 
-function event(name: 'snapshot' | 'channel' | 'message', data: ChatSnapshot | ChatChannel | ChatMessage) {
+class ApprovalNotFoundError extends Error {
+  readonly statusCode = 404;
+
+  constructor() {
+    super('That approval request is no longer in the chat history.');
+  }
+}
+
+class UnknownApproverError extends Error {
+  readonly statusCode = 400;
+
+  constructor(id: string) {
+    super(`${id} is not a chat participant. Approvers must be participant IDs, such as a message's author.id.`);
+  }
+}
+
+class NotApproverError extends Error {
+  readonly statusCode = 403;
+
+  constructor(approvers: ChatAuthor[]) {
+    super(`Only ${approvers.map(approver => approver.name).join(', ')} can approve or reject this request.`);
+  }
+}
+
+class ApprovalDecidedError extends Error {
+  readonly statusCode = 409;
+
+  constructor({ status, decidedBy }: ChatApproval) {
+    super(`This request was already ${status}${decidedBy ? ` by ${decidedBy.name}` : ''}.`);
+  }
+}
+
+function event(
+  name: 'snapshot' | 'channel' | 'message' | 'message_updated' | 'thinking',
+  data: ChatSnapshot | ChatChannel | ChatMessage | ChatThinking,
+) {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
 export class Chat {
-  private readonly channels = [...defaultChannels];
+  private readonly channels = [...seedChannels];
   private readonly participants = new Map<string, ChatAuthor>();
   private readonly availableAvatars = [...joinAvatars];
   private readonly clients = new Set<ServerResponse>();
   private readonly histories = new Map<string, HistoryEntry[]>(this.channels.map(channel => [channel.id, []]));
+  // Channels where Ampersand is working on a reply.
+  private readonly thinking = new Set<string>();
   private sequence = 0;
 
   constructor() {
-    const now = Date.now();
-    for (const [index, [channel, name, text]] of projectHistory.entries()) {
-      this.histories.get(channel)?.push({
-        message: {
-          id: ++this.sequence, channel, author: { id: `seed:${name}`, name, avatar: avatarUrl(rosterAvatars.get(name) ?? defaultAvatar) }, text,
-          at: now - (projectHistory.length - index) * seedMessageSpacingMs,
-        },
-      });
+    for (const { channel, author: name, text, at } of seedMessages()) {
+      const author = { id: `seed:${name}`, name, avatar: avatarUrl(rosterAvatars.get(name) ?? defaultAvatar) };
+      this.histories.get(channel)?.push({ message: { id: ++this.sequence, channel, author, text, at } });
     }
   }
 
@@ -150,13 +123,51 @@ export class Chat {
     return channel;
   }
 
-  postMessage(channel: string, author: ChatAuthor, text: string, nonce?: string) {
+  postMessage(channel: string, author: ChatAuthor, text: string, nonce?: string, approval?: ChatApproval) {
     const history = this.history(channel);
-    const message = { id: ++this.sequence, channel, author, text, at: Date.now() };
+    const message: ChatMessage = { id: ++this.sequence, channel, author, text, at: Date.now(), ...(approval && { approval }) };
     history.push({ message, nonce });
     if (history.length > historyLimit) history.shift();
     this.broadcast(event('message', message));
     return message;
+  }
+
+  // Posts a message that the participants in `approverIds` can approve or reject. `action` is
+  // stored with the message, so approving runs exactly what was shown.
+  requestApproval(channel: string, author: ChatAuthor, text: string, action: ApprovalAction, approverIds: string[]) {
+    this.history(channel);
+    const participants = [...this.participants.values()];
+    const approvers = [...new Set(approverIds)].map(id => {
+      const approver = participants.find(participant => participant.id === id);
+      if (!approver) throw new UnknownApproverError(id);
+      return approver;
+    });
+    const approval: ChatApproval = { id: randomUUID(), action, approvers, status: 'pending' };
+    return { message: this.postMessage(channel, author, text, undefined, approval), approval };
+  }
+
+  // Records a decision on a pending approval. `settle` runs the decision.
+  // Everything here is synchronous, so two people deciding at once cannot both run it. If `settle`
+  // throws, the request stays pending.
+  decideApproval(id: string, decision: ApprovalDecision, author: ChatAuthor, settle: (approval: ChatApproval, channel: string) => void) {
+    const entry = [...this.histories.values()].flat().find(item => item.message.approval?.id === id);
+    const approval = entry?.message.approval;
+    if (!entry || !approval) throw new ApprovalNotFoundError();
+    if (!approval.approvers.some(approver => approver.id === author.id)) throw new NotApproverError(approval.approvers);
+    if (approval.status !== 'pending') throw new ApprovalDecidedError(approval);
+
+    settle(approval, entry.message.channel);
+    const status = decision === 'approve' ? 'approved' : 'rejected';
+    entry.message = { ...entry.message, approval: { ...approval, status, decidedBy: author, decidedAt: Date.now() } };
+    this.broadcast(event('message_updated', entry.message));
+    return entry.message;
+  }
+
+  setThinking(channel: string, thinking: boolean) {
+    if (!this.histories.has(channel) || this.thinking.has(channel) === thinking) return;
+    if (thinking) this.thinking.add(channel);
+    else this.thinking.delete(channel);
+    this.broadcast(event('thinking', { channel, thinking }));
   }
 
   findByNonce(channel: string, authorId: string, nonce: string) {
@@ -175,6 +186,7 @@ export class Chat {
     stream.write(event('snapshot', {
       channels: this.channels,
       messages: [...this.histories.values()].flatMap(history => history.map(item => item.message)),
+      thinking: [...this.thinking],
     }));
   }
 
